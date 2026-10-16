@@ -102,11 +102,35 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
   if (!configured) { show("setupNeeded"); return; }
-  init().catch((e) => { console.error(e); toast(friendlyError(e), "err"); });
+  const url = cleanSupabaseUrl(cfg.SUPABASE_URL);
+  if (!url) {
+    $("setupMsg").innerHTML = `The Project URL in <code>config.js</code> doesn't look right. It should look like <code>https://abcdefgh.supabase.co</code>, with nothing after <code>.supabase.co</code>. You currently have: <code>${esc(cfg.SUPABASE_URL)}</code>`;
+    show("setupNeeded");
+    return;
+  }
+  init(url).catch((e) => { console.error(e); toast(friendlyError(e), "err"); });
 });
 
-async function init() {
-  sb = window.supabase.createClient(cfg.SUPABASE_URL.trim(), cfg.SUPABASE_KEY.trim());
+// Accepts the many ways people paste their Supabase address and returns
+// just "https://<project>.supabase.co". Returns null if it can't tell.
+function cleanSupabaseUrl(raw) {
+  let s = String(raw || "").trim().replace(/^["'<\s]+|["'>\s]+$/g, "");
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase();
+  // Pasted the dashboard link, e.g. https://supabase.com/dashboard/project/abcdefgh/settings/api
+  const dash = u.pathname.match(/\/project\/([a-z0-9]{10,})/i);
+  if ((host === "supabase.com" || host.endsWith(".supabase.com")) && dash) return `https://${dash[1].toLowerCase()}.supabase.co`;
+  // Normal project address, possibly with /rest/v1/ or a trailing slash: keep only the start.
+  if (host.endsWith(".supabase.co") || host.endsWith(".supabase.in")) return `https://${host}`;
+  // Self-hosted or custom domain: keep scheme + host + port only.
+  if (host.includes(".")) return u.origin;
+  return null;
+}
+
+async function init(url) {
+  sb = window.supabase.createClient(url, cfg.SUPABASE_KEY.trim());
   wireControls();
   const { data } = await sb.auth.getSession();
   await handleSession(data.session);
