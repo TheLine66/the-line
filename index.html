@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Line — Recipe Cost & Performance Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ Loading ============ -->
+<div id="boot" class="screen center"><p class="muted">Loading…</p></div>
+
+<!-- ============ Config missing ============ -->
+<div id="setupNeeded" class="screen center hidden">
+  <div class="auth-card">
+    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
+    <h2>Almost there!</h2>
+    <p id="setupMsg">This app isn't connected to a database yet. Open <code>config.js</code> and paste in your Supabase Project URL and Publishable key, then reload this page.</p>
+  </div>
+</div>
+
+<!-- ============ Sign in / sign up ============ -->
+<div id="authScreen" class="screen center hidden">
+  <div class="auth-card">
+    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
+    <p class="muted small">Recipe cost & sales performance tracker</p>
+    <h2 id="authTitle">Sign in</h2>
+    <form id="authForm">
+      <label>Email<input type="email" id="authEmail" required autocomplete="email"></label>
+      <label>Password<input type="password" id="authPassword" required minlength="6" autocomplete="current-password"></label>
+      <button class="applybtn wide" type="submit" id="authSubmit">Sign in</button>
+    </form>
+    <p class="form-msg" id="authMsg"></p>
+    <button class="linkbtn" id="authToggle" type="button">New here? Create an account</button>
+  </div>
+</div>
+
+<!-- ============ Create a restaurant ============ -->
+<div id="onboardScreen" class="screen center hidden">
+  <div class="auth-card">
+    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
+    <h2>Add a restaurant</h2>
+    <form id="onboardForm">
+      <label>Restaurant name<input id="onboardName" required maxlength="100" placeholder="e.g. The Kennedy"></label>
+      <label class="check"><input type="checkbox" id="onboardSeed" checked> Start with the sample dinner menu (16 dishes, 70 ingredients, 4 weeks of sales)</label>
+      <button class="applybtn wide" type="submit" id="onboardSubmit">Create restaurant</button>
+    </form>
+    <p class="form-msg" id="onboardMsg"></p>
+    <div class="row-links">
+      <button class="linkbtn hidden" id="onboardCancel" type="button">Cancel</button>
+      <button class="linkbtn" id="onboardSignOut" type="button">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ The app ============ -->
+<div id="appScreen" class="hidden">
+  <header>
+    <div class="header-top">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <div>
+          <h1>The Line</h1>
+          <div class="sub">Recipe cost & sales performance tracker</div>
+        </div>
+      </div>
+      <div class="header-controls">
+        <select id="restaurantSelect" aria-label="Restaurant"></select>
+        <button class="ghostbtn" id="settingsBtn" type="button">Settings</button>
+        <button class="ghostbtn" id="signOutBtn" type="button">Sign out</button>
+        <div class="user-email" id="userEmail"></div>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-page="cost">Cost Tracker</button>
+      <button class="tab" data-page="perf">Performance</button>
+      <button class="tab" data-page="sales">Weekly Sales</button>
+      <button class="tab" data-page="ingredients">Ingredients</button>
+      <button class="tab" data-page="recipes">Recipes</button>
+    </nav>
+  </header>
+
+  <!-- What-if bar (Cost Tracker + Performance) -->
+  <div class="simbar" id="simbar">
+    <div class="simfield">
+      <label for="weekSelect">Sales week</label>
+      <select id="weekSelect"></select>
+    </div>
+    <div class="simfield">
+      <label for="ingredientSelect">What-if: ingredient</label>
+      <select id="ingredientSelect"></select>
+    </div>
+    <div class="simfield">
+      <label>Direction</label>
+      <div class="sign-toggle">
+        <button type="button" class="plus active" id="signPlus">+</button>
+        <button type="button" class="minus" id="signMinus">−</button>
+      </div>
+    </div>
+    <div class="simfield">
+      <label for="pctInput">Price change (%)</label>
+      <input type="number" class="num-input" id="pctInput" value="10" min="0" max="200" step="1">
+    </div>
+    <div class="simfield">
+      <label>&nbsp;</label>
+      <button class="applybtn" id="applyBtn" type="button">Apply</button>
+    </div>
+    <div class="simfield">
+      <label for="scenarioSelect">Saved scenarios</label>
+      <select id="scenarioSelect"></select>
+    </div>
+    <div class="simfield">
+      <label>&nbsp;</label>
+      <div class="btnrow">
+        <button class="ghostbtn" id="saveScenarioBtn" type="button">Save</button>
+        <button class="ghostbtn" id="deleteScenarioBtn" type="button">Delete</button>
+      </div>
+    </div>
+    <button class="reset-link" id="resetBtn" type="button">Reset all prices</button>
+    <div class="active-adj" id="activeAdj"></div>
+  </div>
+
+  <!-- Cost Tracker -->
+  <div class="page active" id="page-cost">
+    <div class="metrics" id="metrics"></div>
+    <main>
+      <div class="rail">
+        <div class="rail-head"><span>Menu</span><span>Food cost %</span></div>
+        <div id="dishList"></div>
+      </div>
+      <div class="panel" id="panel"></div>
+    </main>
+  </div>
+
+  <!-- Performance -->
+  <div class="page" id="page-perf">
+    <div class="perf-wrap" id="perfWrap">
+      <div class="metrics flush" id="perfMetrics"></div>
+      <div class="callout" id="callout"></div>
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3>Popularity vs. profitability</h3>
+          <span class="note">Bubble size = weekly revenue · color = food cost status</span>
+        </div>
+        <div id="quadrantChart"></div>
+        <div class="legend">
+          <span class="sw"><span class="dotlg" style="background:var(--sage)"></span> On target</span>
+          <span class="sw"><span class="dotlg" style="background:var(--amber)"></span> Trending high</span>
+          <span class="sw"><span class="dotlg" style="background:var(--rust)"></span> Over target</span>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head"><h3>Dish performance, ranked by weekly margin $</h3></div>
+        <div class="scroll-x"><table class="perf" id="perfTable"></table></div>
+      </div>
+    </div>
+    <div class="perf-wrap hidden" id="perfEmpty">
+      <div class="chart-card empty">
+        <h3>No sales numbers yet</h3>
+        <p>Performance needs to know how many plates of each dish you sold. Enter a week of sales first.</p>
+        <button class="applybtn" data-goto="sales" type="button">Enter weekly sales</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Weekly Sales -->
+  <div class="page" id="page-sales">
+    <div class="perf-wrap">
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3>Enter plates sold</h3>
+          <span class="note">Weeks start on Monday. Leave a box blank if you don't know.</span>
+        </div>
+        <div class="toolbar">
+          <button class="ghostbtn dark" id="salesPrev" type="button" aria-label="Previous week">←</button>
+          <label class="inline">Week of <input type="date" id="salesWeek"></label>
+          <button class="ghostbtn dark" id="salesNext" type="button" aria-label="Next week">→</button>
+          <span class="note" id="salesWeekNote"></span>
+        </div>
+        <div class="scroll-x"><table class="edit" id="salesTable"></table></div>
+        <div class="row-actions">
+          <button class="applybtn" id="saveSalesBtn" type="button">Save this week</button>
+          <span class="note" id="salesTotal"></span>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head"><h3>Weeks on file</h3><span class="note">Revenue uses today's menu prices</span></div>
+        <div class="scroll-x"><table class="edit" id="weeksTable"></table></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ingredients -->
+  <div class="page" id="page-ingredients">
+    <div class="perf-wrap">
+      <div class="chart-card">
+        <div class="chart-head"><h3>Add an ingredient</h3></div>
+        <form class="toolbar" id="addIngForm">
+          <label class="stack">Name<input id="newIngName" required maxlength="100" placeholder="e.g. Short rib"></label>
+          <label class="stack">Unit<input id="newIngUnit" required maxlength="20" value="oz" list="unitList" class="short"></label>
+          <label class="stack">Cost per unit ($)<input id="newIngCost" type="number" required min="0" step="0.01" class="short" placeholder="0.00"></label>
+          <button class="applybtn" type="submit">Add</button>
+        </form>
+        <datalist id="unitList"><option value="oz"><option value="lb"><option value="each"><option value="g"><option value="kg"><option value="fl oz"><option value="qt"><option value="gal"></datalist>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3>Ingredient prices</h3>
+          <span class="note">Change a price and click away — it saves automatically.</span>
+        </div>
+        <div class="toolbar"><input id="ingSearch" type="search" placeholder="Search ingredients…" class="search"></div>
+        <div class="scroll-x"><table class="edit" id="ingTable"></table></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recipes -->
+  <div class="page" id="page-recipes">
+    <main>
+      <div class="rail">
+        <div class="rail-head"><span>Dishes</span><button class="linkbtn light" id="newDishBtn" type="button">+ New dish</button></div>
+        <div id="recipeList"></div>
+      </div>
+      <div class="panel" id="recipeEditor"></div>
+    </main>
+  </div>
+
+  <footer>The Line · FinTech @ Rocky Top class demo · numbers are what you enter</footer>
+</div>
+
+<!-- ============ Settings dialog ============ -->
+<dialog id="settingsDialog">
+  <form id="settingsForm" method="dialog">
+    <h2>Restaurant settings</h2>
+    <label>Restaurant name<input id="setName" required maxlength="100"></label>
+    <div class="three">
+      <label>Target low %<input id="setLow" type="number" min="0" max="100" step="0.5" required></label>
+      <label>Target mid %<input id="setMid" type="number" min="0" max="100" step="0.5" required></label>
+      <label>Target high %<input id="setHigh" type="number" min="0" max="100" step="0.5" required></label>
+    </div>
+    <p class="muted small">Green = at or under "low". Amber = between low and high. Red = over "high". Price suggestions aim for "mid".</p>
+    <p class="form-msg" id="settingsMsg"></p>
+    <div class="dialog-actions">
+      <button class="linkbtn danger" id="deleteRestaurantBtn" type="button">Delete this restaurant</button>
+      <span class="spacer"></span>
+      <button class="ghostbtn dark" id="settingsCancel" type="button">Cancel</button>
+      <button class="applybtn" id="settingsSave" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="seed-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
