@@ -1,10 +1,16 @@
 // =====================================================================
-// The Line — sample menu
-// Used ONLY when you tick "Start with the sample menu" while creating a
-// restaurant. It copies this data into your database once; after that,
-// everything is edited inside the app. Prices and sales are placeholders.
+// The Line — sample menus
+// Used ONLY when you pick a sample menu while creating a restaurant. The
+// app copies it into your database once; after that, everything is edited
+// inside the app. All prices and sales numbers are made up.
 // =====================================================================
-window.SEED = {
+window.SEEDS = window.SEEDS || {};
+
+// ---------------------------------------------------------------------
+// Sample 1: The Kennedy (the original prototype menu)
+// ---------------------------------------------------------------------
+window.SEEDS.kennedy = {
+  label: "The Kennedy: upscale American dinner menu (16 dishes)",
   ingredients: {
     potatofries:      { name: "Hand-cut fries", unit: "oz", cost: 0.07 },
     truffleoil:       { name: "White truffle oil", unit: "oz", cost: 2.20 },
@@ -113,4 +119,127 @@ window.SEED = {
   ],
   // Week-to-week wiggle for the 4 sample weeks of sales (oldest → newest).
   weekFactors: [0.92, 1.06, 0.97, 1.0],
+};
+
+// ---------------------------------------------------------------------
+// Sample 2: Kelley's (imaginary Irish-American gastropub)
+// Built to tell a story on the Performance tab: Fish & Chips is the
+// best-seller AND the worst food-cost %, and the fish supplier just
+// raised cod prices (see the saved scenario at the bottom).
+// ---------------------------------------------------------------------
+window.SEEDS.kelleys = {
+  label: "Kelley's: Irish-American gastropub (17 dishes, 6 weeks of sales)",
+  targets: { low: 28, mid: 31, high: 34 },
+  ingredients: {
+    // Proteins
+    cod:          { name: "Atlantic cod fillet", unit: "oz", cost: 0.85 },
+    groundchuck:  { name: "Ground chuck (80/20)", unit: "oz", cost: 0.38 },
+    cornedbeef:   { name: "Corned beef brisket", unit: "oz", cost: 0.62 },
+    beefchuck:    { name: "Beef chuck, diced", unit: "oz", cost: 0.42 },
+    lambshank:    { name: "Lamb shank", unit: "each", cost: 7.80 },
+    wings:        { name: "Chicken wings", unit: "oz", cost: 0.32 },
+    bangers:      { name: "Pork bangers", unit: "oz", cost: 0.36 },
+    baconrashers: { name: "Irish bacon rashers", unit: "oz", cost: 0.55 },
+    blackpudding: { name: "Black pudding", unit: "oz", cost: 0.48 },
+    smokedsalmon: { name: "Smoked salmon", unit: "oz", cost: 1.40 },
+    scallops:     { name: "Sea scallops (U10)", unit: "each", cost: 2.10 },
+    egg:          { name: "Egg", unit: "each", cost: 0.28 },
+    // Dairy
+    cheddar:      { name: "Aged Irish cheddar", unit: "oz", cost: 0.62 },
+    swiss:        { name: "Swiss cheese", unit: "oz", cost: 0.38 },
+    bluecheese:   { name: "Irish blue cheese", unit: "oz", cost: 0.70 },
+    butter:       { name: "Irish butter", unit: "oz", cost: 0.32 },
+    cream:        { name: "Heavy cream", unit: "oz", cost: 0.16 },
+    cremefraiche: { name: "Crème fraîche", unit: "oz", cost: 0.35 },
+    icecream:     { name: "Vanilla ice cream", unit: "oz", cost: 0.20 },
+    // Produce
+    chips:        { name: "Hand-cut chips", unit: "oz", cost: 0.07 },
+    potato:       { name: "Yukon gold potatoes", unit: "oz", cost: 0.06 },
+    colcannon:    { name: "Colcannon mash", unit: "oz", cost: 0.11 },
+    cabbage:      { name: "Green cabbage", unit: "oz", cost: 0.04 },
+    carrots:      { name: "Carrots", unit: "oz", cost: 0.05 },
+    rootveg:      { name: "Root vegetable mix", unit: "oz", cost: 0.07 },
+    leeks:        { name: "Leeks", unit: "oz", cost: 0.12 },
+    mushrooms:    { name: "Cremini mushrooms", unit: "oz", cost: 0.22 },
+    greens:       { name: "Mixed greens", unit: "oz", cost: 0.28 },
+    lettuce:      { name: "Butter lettuce", unit: "oz", cost: 0.20 },
+    tomato:       { name: "Tomato", unit: "oz", cost: 0.12 },
+    apple:        { name: "Granny Smith apple", unit: "oz", cost: 0.10 },
+    celery:       { name: "Celery sticks", unit: "oz", cost: 0.05 },
+    chives:       { name: "Chives", unit: "oz", cost: 0.60 },
+    lemon:        { name: "Lemon", unit: "each", cost: 0.30 },
+    // House-made sauces & prepped items
+    beerbatter:   { name: "Guinness beer batter", unit: "oz", cost: 0.12 },
+    tartar:       { name: "Tartar sauce", unit: "oz", cost: 0.20 },
+    mushypeas:    { name: "Mushy peas", unit: "oz", cost: 0.10 },
+    peapuree:     { name: "Pea purée", unit: "oz", cost: 0.14 },
+    mustardcream: { name: "Whole-grain mustard cream", unit: "oz", cost: 0.30 },
+    pubsauce:     { name: "Kelley's pub sauce", unit: "oz", cost: 0.18 },
+    bbqsauce:     { name: "Guinness BBQ sauce", unit: "oz", cost: 0.18 },
+    bluedip:      { name: "Blue cheese dip", unit: "oz", cost: 0.25 },
+    beercheese:   { name: "Beer cheese", unit: "oz", cost: 0.30 },
+    curry:        { name: "Chip-shop curry sauce", unit: "oz", cost: 0.15 },
+    oniongravy:   { name: "Onion gravy", unit: "oz", cost: 0.12 },
+    caramelonion: { name: "Caramelized onions", unit: "oz", cost: 0.10 },
+    sauerkraut:   { name: "Sauerkraut", unit: "oz", cost: 0.08 },
+    vinaigrette:  { name: "Cider vinaigrette", unit: "oz", cost: 0.15 },
+    walnuts:      { name: "Candied walnuts", unit: "oz", cost: 0.55 },
+    capers:       { name: "Capers", unit: "oz", cost: 0.45 },
+    toffee:       { name: "Toffee sauce", unit: "oz", cost: 0.25 },
+    mousse:       { name: "Chocolate mousse base", unit: "oz", cost: 0.30 },
+    whipped:      { name: "Whipped cream", unit: "oz", cost: 0.12 },
+    // Pantry, bakery & bar
+    stout:        { name: "Guinness stout (kitchen)", unit: "oz", cost: 0.16 },
+    baileys:      { name: "Baileys Irish cream", unit: "oz", cost: 0.95 },
+    chickenstock: { name: "Chicken stock", unit: "oz", cost: 0.05 },
+    panko:        { name: "Panko breadcrumbs", unit: "oz", cost: 0.10 },
+    bun:          { name: "Potato bun", unit: "each", cost: 0.45 },
+    rye:          { name: "Marbled rye bread (2 slices)", unit: "each", cost: 0.40 },
+    sodabread:    { name: "Brown soda bread", unit: "oz", cost: 0.09 },
+    pretzel:      { name: "Bavarian soft pretzel", unit: "each", cost: 0.85 },
+    puffpastry:   { name: "Puff pastry lid", unit: "each", cost: 0.65 },
+    toffeecake:   { name: "Sticky toffee sponge", unit: "each", cost: 0.95 },
+  },
+  dishes: [
+    { name: "Scotch Eggs", category: "Starters", price: 12.00, weeklyUnits: 40,
+      items: [ ["egg", 2], ["bangers", 4], ["panko", 1], ["mustardcream", 1.5] ] },
+    { name: "Guinness BBQ Wings", category: "Starters", price: 15.00, weeklyUnits: 70,
+      items: [ ["wings", 12], ["bbqsauce", 2], ["celery", 2], ["bluedip", 2] ] },
+    { name: "Soft Pretzel & Beer Cheese", category: "Starters", price: 11.00, weeklyUnits: 55,
+      items: [ ["pretzel", 1], ["beercheese", 4], ["mustardcream", 1] ] },
+    { name: "Smoked Salmon & Soda Bread", category: "Starters", price: 16.00, weeklyUnits: 18,
+      items: [ ["smokedsalmon", 3], ["sodabread", 3], ["butter", 0.5], ["capers", 0.3], ["cremefraiche", 1], ["lemon", 0.25] ] },
+    { name: "Potato Leek Soup", category: "Soups & Salads", price: 9.00, weeklyUnits: 45,
+      items: [ ["potato", 6], ["leeks", 3], ["cream", 3], ["chickenstock", 8], ["chives", 0.1], ["sodabread", 2] ] },
+    { name: "Orchard Salad", category: "Soups & Salads", price: 13.00, weeklyUnits: 25,
+      items: [ ["greens", 4], ["apple", 2], ["walnuts", 1], ["bluecheese", 1.5], ["vinaigrette", 1.5] ] },
+    { name: "Kelley's Pub Burger", category: "Handhelds", price: 17.00, weeklyUnits: 110,
+      items: [ ["groundchuck", 8], ["cheddar", 1.5], ["baconrashers", 1], ["bun", 1], ["caramelonion", 1], ["pubsauce", 1], ["lettuce", 0.5], ["tomato", 1], ["chips", 8] ] },
+    { name: "Corned Beef Reuben", category: "Handhelds", price: 16.00, weeklyUnits: 60,
+      items: [ ["cornedbeef", 6], ["rye", 1], ["swiss", 1.5], ["sauerkraut", 2], ["pubsauce", 1], ["chips", 8] ] },
+    { name: "Fish & Chips", category: "Mains", price: 21.00, weeklyUnits: 140,
+      items: [ ["cod", 8], ["beerbatter", 3], ["chips", 10], ["tartar", 2], ["mushypeas", 4], ["lemon", 0.5] ] },
+    { name: "Guinness Beef Pie", category: "Mains", price: 22.00, weeklyUnits: 65,
+      items: [ ["beefchuck", 8], ["stout", 3], ["mushrooms", 2], ["rootveg", 3], ["puffpastry", 1], ["colcannon", 5] ] },
+    { name: "Braised Lamb Shank", category: "Mains", price: 32.00, weeklyUnits: 22,
+      items: [ ["lambshank", 1], ["stout", 3], ["rootveg", 4], ["colcannon", 6] ] },
+    { name: "Corned Beef & Cabbage", category: "Mains", price: 20.00, weeklyUnits: 35,
+      items: [ ["cornedbeef", 8], ["cabbage", 6], ["potato", 6], ["carrots", 3], ["mustardcream", 2] ] },
+    { name: "Seared Scallops & Black Pudding", category: "Mains", price: 34.00, weeklyUnits: 14,
+      items: [ ["scallops", 5], ["peapuree", 3], ["blackpudding", 2], ["butter", 1] ] },
+    { name: "Bangers & Mash", category: "Mains", price: 17.00, weeklyUnits: 20,
+      items: [ ["bangers", 8], ["colcannon", 8], ["oniongravy", 4] ] },
+    { name: "Curry Chips", category: "Sides", price: 7.00, weeklyUnits: 50,
+      items: [ ["chips", 10], ["curry", 3] ] },
+    { name: "Sticky Toffee Pudding", category: "Desserts", price: 10.00, weeklyUnits: 48,
+      items: [ ["toffeecake", 1], ["toffee", 2], ["icecream", 2] ] },
+    { name: "Baileys Chocolate Mousse", category: "Desserts", price: 9.00, weeklyUnits: 30,
+      items: [ ["mousse", 5], ["whipped", 1], ["baileys", 0.5] ] },
+  ],
+  // 6 finished weeks of sales, oldest → newest.
+  weekFactors: [0.88, 0.95, 1.02, 0.97, 1.05, 1.0],
+  // Pre-saved what-if scenarios (keys refer to the ingredient list above).
+  scenarios: [
+    { name: "Cod +18% (supplier notice)", adjustments: { cod: 18 } },
+  ],
 };

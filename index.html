@@ -45,7 +45,12 @@
     <h2>Add a restaurant</h2>
     <form id="onboardForm">
       <label>Restaurant name<input id="onboardName" required maxlength="100" placeholder="e.g. The Kennedy"></label>
-      <label class="check"><input type="checkbox" id="onboardSeed" checked> Start with the sample dinner menu (16 dishes, 70 ingredients, 4 weeks of sales)</label>
+      <label>Start with
+        <select id="onboardSeed" class="light-select">
+          <option value="">A blank restaurant (I'll add my own menu)</option>
+        </select>
+      </label>
+      <p class="muted small" id="onboardSeedNote">Sample menus are made-up data you can edit or delete anytime.</p>
       <button class="applybtn wide" type="submit" id="onboardSubmit">Create restaurant</button>
     </form>
     <p class="form-msg" id="onboardMsg"></p>

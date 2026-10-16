@@ -207,8 +207,9 @@ async function loadRestaurantData() {
 function sortedWeeks() { return [...salesByWeek.keys()].sort().reverse(); }
 
 // Copies the sample menu (seed-data.js) into a new restaurant.
-async function seedRestaurant(rid) {
-  const S = window.SEED;
+async function seedRestaurant(rid, key) {
+  const S = (window.SEEDS || {})[key];
+  if (!S) return;
   const keys = Object.keys(S.ingredients);
   const ingRows = await run(sb.from("ingredients").insert(keys.map((k) => ({ restaurant_id: rid, ...S.ingredients[k] }))).select("id,name"));
   const ingIdByName = new Map(ingRows.map((r) => [r.name, r.id]));
@@ -233,6 +234,14 @@ async function seedRestaurant(rid) {
     }));
   });
   await run(sb.from("weekly_sales").insert(sales));
+
+  // Pre-saved what-if scenarios: translate ingredient keys into real ids.
+  if (S.scenarios?.length) {
+    await run(sb.from("scenarios").insert(S.scenarios.map((sc) => ({
+      restaurant_id: rid, name: sc.name,
+      adjustments: Object.fromEntries(Object.entries(sc.adjustments).map(([k, v]) => [ingId(k), v]).filter(([id]) => id)),
+    }))));
+  }
 }
 
 // ================================================================ CALCS
@@ -850,7 +859,10 @@ async function deleteScenario() {
 // ---------------------------------------------------------- Restaurants
 function openOnboarding(canCancel) {
   $("onboardName").value = "";
-  $("onboardSeed").checked = true;
+  const sel = $("onboardSeed");
+  sel.innerHTML = `<option value="">A blank restaurant (I'll add my own menu)</option>` +
+    Object.entries(window.SEEDS || {}).map(([k, v]) => `<option value="${k}">Sample: ${esc(v.label)}</option>`).join("");
+  sel.value = "";
   $("onboardMsg").textContent = "";
   $("onboardMsg").className = "form-msg";
   $("onboardCancel").classList.toggle("hidden", !canCancel);
@@ -868,10 +880,13 @@ async function createRestaurant(e) {
   msg.textContent = "Creating your restaurant…";
   let created = null;
   try {
-    created = await run(sb.from("restaurants").insert({ name }).select("*").single());
-    if ($("onboardSeed").checked) {
+    const seedKey = $("onboardSeed").value;
+    const t = window.SEEDS?.[seedKey]?.targets;
+    const row = t ? { name, target_low: t.low, target_mid: t.mid, target_high: t.high } : { name };
+    created = await run(sb.from("restaurants").insert(row).select("*").single());
+    if (seedKey) {
       msg.textContent = "Loading the sample menu (a few seconds)…";
-      await seedRestaurant(created.id);
+      await seedRestaurant(created.id, seedKey);
     }
     await loadRestaurants(created.id);
     toast(`Welcome to ${created.name}!`);
