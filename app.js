@@ -365,6 +365,26 @@ function suggestedAction(dish, cost, pct) {
   return { ok: false, text: `Over target. Raise the price to <strong>${fmt(idealPrice)}</strong> (+${fmt(delta)}), or cut the portion by roughly <strong>${portionCut.toFixed(0)}%</strong> to bring food cost back to ${t.mid}%.` };
 }
 
+// A simple bar showing where this dish's food cost sits vs. the target zone.
+function targetBar(pct, st) {
+  const t = targets();
+  const max = Math.max(50, Math.ceil((Math.max(pct, t.high) + 6) / 10) * 10);
+  const at = (v) => Math.min(100, Math.max(0, (v / max) * 100)).toFixed(2);
+  const zoneMid = ((t.low + t.high) / 2 / max) * 100;
+  return `
+    <div class="gauge" role="img" aria-label="Food cost ${fmtPct(pct)}; target ${t.low} to ${t.high} percent">
+      <div class="gauge-track">
+        <div class="gauge-zone" style="left:${at(t.low)}%;width:${(at(t.high) - at(t.low)).toFixed(2)}%"></div>
+        <div class="gauge-mark ${st}" style="left:${at(pct)}%"><span>${fmtPct(pct)}</span></div>
+      </div>
+      <div class="gauge-scale">
+        <span style="left:0">0%</span>
+        <span class="zone-label" style="left:${zoneMid.toFixed(2)}%">Target ${t.low}–${t.high}%</span>
+        <span style="right:0">${max}%</span>
+      </div>
+    </div>`;
+}
+
 function renderPanel() {
   const el = $("panel");
   const dish = dishes.find((d) => d.id === selectedDishId);
@@ -400,6 +420,7 @@ function renderPanel() {
       <div><div class="val mono ${st === "red" ? "rust" : ""}">${fmtPct(pct)}</div><div class="lbl">Food cost % (target ${t.low}–${t.high}%)</div></div>
       <div><div class="val mono">${fmt(dish.price - cost)}</div><div class="lbl">Gross margin per plate</div></div>
     </div>
+    ${targetBar(pct, st)}
     <div class="section-label">Recipe breakdown</div>
     <table class="ingredients">
       <thead><tr><th>Ingredient</th><th class="num">Qty</th><th class="num">Cost</th></tr></thead>
@@ -467,28 +488,41 @@ function renderQuadrantChart(rows, avgUnits, avgMargin) {
   const color = { green: "var(--sage)", amber: "var(--amber)", red: "var(--rust)" };
   const ax = x(avgUnits).toFixed(1), ay = y(avgMargin).toFixed(1);
 
+  // Only the 6 biggest sellers get a name label, so the chart stays readable.
+  // Hover (or tap) any bubble to see its name.
+  // Labels that would overlap one already placed are skipped.
+  const labeled = new Set();
+  const boxes = [];
+  for (const r of [...rows].filter((r) => r.units > 0).sort((a, b) => b.weeklyRevenue - a.weeklyRevenue).slice(0, 6)) {
+    const name = r.d.name.length > 22 ? 22 : r.d.name.length;
+    const w = name * 6 + 6, cx = x(r.units), top = y(r.marginPerPlate) - (6 + (r.weeklyRevenue / maxRevenue) * 16) - 17;
+    const box = { l: cx - w / 2, r: cx + w / 2, t: top, b: top + 14 };
+    if (boxes.some((o) => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)) continue;
+    boxes.push(box); labeled.add(r.d.id);
+  }
   const points = rows.map((r) => {
     const cx = x(r.units), cy = y(r.marginPerPlate);
     const rad = 6 + (r.weeklyRevenue / maxRevenue) * 16;
-    const label = r.d.name.length > 16 ? r.d.name.slice(0, 15) + "…" : r.d.name;
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${color[r.status]}" fill-opacity="0.82" stroke="#201f1c" stroke-opacity="0.15"><title>${esc(r.d.name)}: ${r.units} sold, ${fmt(r.marginPerPlate)} margin/plate</title></circle>
-      <text x="${cx.toFixed(1)}" y="${(cy - rad - 5).toFixed(1)}" font-size="10.5" font-family="Inter, sans-serif" fill="#201f1c" fill-opacity="0.75" text-anchor="middle">${esc(label)}</text>`;
+    const label = r.d.name.length > 22 ? r.d.name.slice(0, 21) + "…" : r.d.name;
+    const text = labeled.has(r.d.id) ? `<text x="${cx.toFixed(1)}" y="${(cy - rad - 5).toFixed(1)}" font-size="10.5" font-weight="600" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.8" text-anchor="middle">${esc(label)}</text>` : "";
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${color[r.status]}" fill-opacity="0.82" stroke="#1C2421" stroke-opacity="0.15"><title>${esc(r.d.name)}: ${r.units} sold, ${fmt(r.marginPerPlate)} margin/plate</title></circle>
+      ${text}`;
   }).join("");
 
   const lbl = (xx, yy, fill, anchor, text) =>
-    `<text x="${xx}" y="${yy}" font-size="11" font-family="Inter, sans-serif" fill="${fill}" text-anchor="${anchor}" font-weight="600">${text}</text>`;
+    `<text x="${xx}" y="${yy}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="${fill}" text-anchor="${anchor}" font-weight="600">${text}</text>`;
   $("quadrantChart").innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Popularity versus profitability chart">
-      <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#201f1c" stroke-opacity="0.25"/>
-      <line x1="${PAD}" y1="${PAD - 10}" x2="${PAD}" y2="${H - PAD}" stroke="#201f1c" stroke-opacity="0.25"/>
-      <line x1="${ax}" y1="${PAD - 10}" x2="${ax}" y2="${H - PAD}" stroke="#201f1c" stroke-opacity="0.15" stroke-dasharray="4 4"/>
-      <line x1="${PAD}" y1="${ay}" x2="${W - PAD}" y2="${ay}" stroke="#201f1c" stroke-opacity="0.15" stroke-dasharray="4 4"/>
-      ${lbl(W - PAD, PAD - 16, "#4B6B4D", "end", "STAR — high volume, high margin")}
-      ${lbl(W - PAD, H - PAD + 22, "#8a6015", "end", "PLOWHORSE — high volume, low margin")}
-      ${lbl(PAD, PAD - 16, "#514F8C", "start", "PUZZLE — low volume, high margin")}
-      ${lbl(PAD, H - PAD + 22, "#B0402F", "start", "DOG — low volume, low margin")}
-      <text x="${W / 2}" y="${H - 8}" font-size="11" font-family="Inter, sans-serif" fill="#201f1c" fill-opacity="0.5" text-anchor="middle">Units sold per week →</text>
-      <text x="14" y="${H / 2}" font-size="11" font-family="Inter, sans-serif" fill="#201f1c" fill-opacity="0.5" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Margin $ per plate →</text>
+      <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.25"/>
+      <line x1="${PAD}" y1="${PAD - 10}" x2="${PAD}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.25"/>
+      <line x1="${ax}" y1="${PAD - 10}" x2="${ax}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.15" stroke-dasharray="4 4"/>
+      <line x1="${PAD}" y1="${ay}" x2="${W - PAD}" y2="${ay}" stroke="#1C2421" stroke-opacity="0.15" stroke-dasharray="4 4"/>
+      ${lbl(W - PAD, PAD - 16, "#2E7D4F", "end", "Stars: popular and profitable")}
+      ${lbl(W - PAD, H - PAD + 22, "#9A6410", "end", "Plowhorses: popular, thinner margin")}
+      ${lbl(PAD, PAD - 16, "#5853A3", "start", "Puzzles: profitable, sell more of these")}
+      ${lbl(PAD, H - PAD + 22, "#C0402B", "start", "Dogs: slow and thin")}
+      <text x="${W / 2}" y="${H - 8}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.5" text-anchor="middle">Units sold per week →</text>
+      <text x="14" y="${H / 2}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.5" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Margin $ per plate →</text>
       ${points}
     </svg>`;
 }
@@ -860,7 +894,7 @@ async function deleteScenario() {
 function openOnboarding(canCancel) {
   $("onboardName").value = "";
   const sel = $("onboardSeed");
-  sel.innerHTML = `<option value="">A blank restaurant (I'll add my own menu)</option>` +
+  sel.innerHTML = `<option value="">Blank: I'll add my own menu</option>` +
     Object.entries(window.SEEDS || {}).map(([k, v]) => `<option value="${k}">Sample: ${esc(v.label)}</option>`).join("");
   sel.value = "";
   $("onboardMsg").textContent = "";
