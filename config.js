@@ -8,6 +8,6 @@
 // "service_role" key into this file.
 // =====================================================================
 window.APP_CONFIG = {
-  SUPABASE_URL: "https://ujwqqikqxmqfkqaktozd.supabase.co/rest/v1/",
+  SUPABASE_URL: "https://ujwqqikqxmqfkqaktozd.supabase.co",
   SUPABASE_KEY: "sb_publishable_0sNb9LrlWjWwg0w5mj_aLA_meR42WfP",
 };
