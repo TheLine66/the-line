@@ -320,6 +320,59 @@ table.recipe td.unit { font-size: 13px; color: var(--ink-3); white-space: nowrap
 .preview .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .preview .lbl { font-size: 12px; color: var(--ink-3); }
 
+/* ---------- Labor Costs ---------- */
+table.edit tr.group td { font-size: 12px; font-weight: 700; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; padding-top: 16px; }
+table.edit label.paid { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 13px; color: var(--ink-2); font-family: inherit; }
+table.edit td input[type=checkbox] { width: auto; min-width: 0; min-height: 0; }
+.toolbar.whatif { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); align-items: flex-end; }
+#laborSettings { display: flex; flex-direction: column; gap: 16px; }
+
+/* ---------- MOD Report ---------- */
+.mod-section { margin-bottom: 30px; }
+.mod-section .section-label .note { font-weight: 500; margin-left: 6px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.form-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); min-width: 0; }
+.form-grid label.wide { grid-column: 1 / -1; }
+.panel textarea {
+  font: inherit; font-size: 15px; padding: 9px 10px; min-height: 72px; resize: vertical; width: 100%;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink);
+}
+.panel textarea:focus { border-color: var(--green); outline: 2px solid rgba(31,77,58,0.18); outline-offset: 0; }
+.panel .form-grid input, .panel .form-grid select { width: 100%; }
+.panel.mod .preview { margin-top: 4px; margin-bottom: 30px; }
+.row-card { position: relative; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 44px 0 14px; margin-bottom: 10px; background: #FAFBFA; }
+.row-card > .iconbtn { position: absolute; top: 8px; right: 8px; }
+.row-card .form-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+table.hours { width: 100%; max-width: 560px; border-collapse: collapse; }
+table.hours th { text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-3); padding: 0 10px 8px 0; border-bottom: 1px solid var(--line); }
+table.hours th.num, table.hours td.num { text-align: right; }
+table.hours td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); font-size: 14px; white-space: nowrap; }
+table.hours td input { width: 80px; }
+table.hours td.barcell { width: 55%; }
+table.hours tfoot td { border-bottom: none; border-top: 2px solid var(--ink); padding-top: 10px; font-weight: 700; white-space: normal; }
+table.hours tfoot td.note { font-weight: 500; }
+.hbar { display: block; height: 10px; border-radius: 999px; background: var(--green); opacity: 0.35; width: 0; transition: width .15s ease; }
+table.hours tr.peak td { font-weight: 700; }
+table.hours tr.peak .hbar { background: var(--butter); opacity: 1; }
+.checks { display: flex; gap: 10px 22px; flex-wrap: wrap; }
+label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); cursor: pointer; }
+label.check input { width: 18px; height: 18px; accent-color: var(--green); }
+
+/* Print (MOD report "Print / save as PDF"): just the report. */
+@media print {
+  body { background: #fff; }
+  header, footer, .simbar, .rail, #modMetrics, .toast, .row-actions, [data-add], .iconbtn, .toolbar { display: none !important; }
+  .row-card { background: none; padding-right: 14px; break-inside: avoid; }
+  main { display: block; padding: 0; }
+  .panel { border: none; padding: 0; min-height: 0; }
+  .panel input, .panel select, .panel textarea { border: none !important; background: none !important; padding: 2px 0 !important; min-height: 0 !important; resize: none; appearance: none; -webkit-appearance: none; }
+  .panel textarea { height: auto; }
+  .panel ::placeholder { color: transparent; }
+  .panel input::-webkit-calendar-picker-indicator { display: none; }
+  .mod-section, .preview { break-inside: avoid; }
+  .hbar { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+
 /* ---------- Settings pop-up ---------- */
 dialog { border: none; padding: 0; background: var(--surface); color: var(--ink); width: min(480px, calc(100vw - 32px)); border-radius: 18px; box-shadow: 0 20px 60px rgba(28,36,33,0.25); }
 dialog::backdrop { background: rgba(28, 36, 33, 0.45); }
@@ -340,6 +393,6 @@ dialog::backdrop { background: rgba(28, 36, 33, 0.45); }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.err { border-left-color: #F08A75; }
-@media (prefers-reduced-motion: reduce) { .toast, .applybtn { transition: none; } table.edit tr.saved td input { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .toast, .applybtn, .hbar { transition: none; } table.edit tr.saved td input { animation: none; } }
 
 footer { padding: 24px clamp(16px, 4vw, 40px) 32px; font-size: 13px; color: var(--ink-3); }

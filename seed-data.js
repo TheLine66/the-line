@@ -2,7 +2,7 @@
 // The Line — sample menus
 // Used ONLY when you pick a sample menu while creating a restaurant. The
 // app copies it into your database once; after that, everything is edited
-// inside the app. All prices and sales numbers are made up.
+// inside the app. All prices, sales numbers, people and events are made up.
 // =====================================================================
 window.SEEDS = window.SEEDS || {};
 
@@ -119,6 +119,21 @@ window.SEEDS.kennedy = {
   ],
   // Week-to-week wiggle for the 4 sample weeks of sales (oldest → newest).
   weekFactors: [0.92, 1.06, 0.97, 1.0],
+  // Sample team for the Labor Costs tab. Hourly hours follow weekFactors.
+  // rate = $/hour (hourly) or $/week (salary). Servers and bartenders earn
+  // Tennessee's tipped minimum wage plus tips.
+  staff: [
+    { name: "Chris Avery",  role: "Executive chef", department: "Mgmt", pay_type: "salary", rate: 1150, hours: 50 },
+    { name: "Dana Whitt",   role: "Line cook",      department: "BOH",  pay_type: "hourly", rate: 18.00, hours: 40 },
+    { name: "Luis Mendez",  role: "Line cook",      department: "BOH",  pay_type: "hourly", rate: 17.00, hours: 36 },
+    { name: "Priya Shah",   role: "Pizza cook",     department: "BOH",  pay_type: "hourly", rate: 16.00, hours: 24 },
+    { name: "Cole Brandt",  role: "Dishwasher",     department: "BOH",  pay_type: "hourly", rate: 13.00, hours: 30 },
+    { name: "Hannah Price", role: "Server",         department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 32 },
+    { name: "Marcus Lee",   role: "Server",         department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 30 },
+    { name: "Grace Kim",    role: "Server",         department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 28 },
+    { name: "Tyler Boone",  role: "Bartender",      department: "FOH",  pay_type: "hourly", rate: 5.00,  hours: 38 },
+    { name: "Ella Ross",    role: "Host",           department: "FOH",  pay_type: "hourly", rate: 12.00, hours: 26 },
+  ],
 };
 
 // ---------------------------------------------------------------------
@@ -241,5 +256,70 @@ window.SEEDS.kelleys = {
   // Pre-saved what-if scenarios (keys refer to the ingredient list above).
   scenarios: [
     { name: "Cod +18% (supplier notice)", adjustments: { cod: 18 } },
+  ],
+  // Sample team for the Labor Costs tab. Hourly hours follow weekFactors.
+  // rate = $/hour (hourly) or $/week (salary). Servers and bartenders earn
+  // Tennessee's tipped minimum wage plus tips. Marco works overtime.
+  staff: [
+    { name: "Declan Byrne", role: "Kitchen manager", department: "Mgmt", pay_type: "salary", rate: 950, hours: 50 },
+    { name: "Marco Ruiz",   role: "Line cook",       department: "BOH",  pay_type: "hourly", rate: 17.00, hours: 42 },
+    { name: "Tasha Green",  role: "Line cook",       department: "BOH",  pay_type: "hourly", rate: 16.00, hours: 34 },
+    { name: "Eli Novak",    role: "Prep cook",       department: "BOH",  pay_type: "hourly", rate: 14.00, hours: 30 },
+    { name: "Sam Ortiz",    role: "Dishwasher",      department: "BOH",  pay_type: "hourly", rate: 12.50, hours: 28 },
+    { name: "Jess Monroe",  role: "Server",          department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 30 },
+    { name: "Kevin Doyle",  role: "Server",          department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 28 },
+    { name: "Ana Lima",     role: "Server",          department: "FOH",  pay_type: "hourly", rate: 2.13,  hours: 26 },
+    { name: "Ryan Shea",    role: "Bartender",       department: "FOH",  pay_type: "hourly", rate: 5.00,  hours: 36 },
+    { name: "Olivia Park",  role: "Host",            department: "FOH",  pay_type: "hourly", rate: 11.00, hours: 24 },
+    { name: "Ben Carter",   role: "Busser",          department: "FOH",  pay_type: "hourly", rate: 10.00, hours: 25 },
+  ],
+  // Sample MOD reports, dated relative to the day the restaurant is created.
+  modReports: [
+    { daysAgo: 1, shift: "Dinner", manager: "Maeve Kelley", data: {
+      weather: "Rain", temp: "54", weather_notes: "Steady rain 5–8 PM. Patio closed; two walk-in parties left at a 30-minute wait.",
+      sales: "3480", hours_from: 16, hours_to: 22,
+      hourly: { 16: 8, 17: 22, 18: 41, 19: 48, 20: 37, 21: 19, 22: 7 },
+      staffing: { foh_sched: "6", foh_actual: "5", boh_sched: "4", boh_actual: "4" },
+      employee: [
+        { dept: "FOH", name: "Kevin Doyle", type: "No call / no show", notes: "Didn't show for his 4 PM shift. Called twice, no answer.", action: "Ana picked up his section. Write-up ready for Monday." },
+        { dept: "BOH", name: "Marco Ruiz", type: "Injury: cut", notes: "Cut left index finger on the mandoline at 6:40 PM.", action: "First aid and a glove; finished on grill. Incident form filed." },
+      ],
+      guest: [
+        { type: "Food: undercooked", table: "Table 12", notes: "Burger ordered medium came out rare.", resolution: "Recooked right away and comped dessert. Guest left happy." },
+        { type: "Slow service / long wait", table: "Bar, 2 guests", notes: "Waited 25 minutes for Fish & Chips in the 7 PM rush.", resolution: "Apologized and comped a pint." },
+      ],
+      comps: [
+        { type: "Recook", item: "Kelley's Pub Burger", amount: "6.20", reason: "Undercooked (Table 12)", approved: "Maeve" },
+        { type: "Comp: kitchen mistake", item: "Sticky Toffee Pudding", amount: "10.00", reason: "Sorry for the recook (Table 12)", approved: "Maeve" },
+        { type: "Comp: service mistake", item: "Pint of Guinness", amount: "7.50", reason: "Long ticket time at the bar", approved: "Maeve" },
+        { type: "Comp: VIP / regular", item: "Scotch Eggs", amount: "12.00", reason: "The Murphys' 10th anniversary", approved: "Maeve" },
+      ],
+      eighty_six: "Fish & Chips 86'd at 9:15 PM: cod order came in 10 lb short, supplier says Thursday. Down to the last keg of Guinness.",
+      maintenance: "Walk-in door gasket is torn (temps still OK at 37°F). Fryer 2 is slow to heat back up; call for service.",
+      cash_over_short: "-4.25", checks: { temps: true, cleaning: true, deposit: true, alarm: true },
+      forecast: { covers: "210", sales: "4000", reservations: "Party of 14 at 7 PM (birthday). Push tables 20–22 together.",
+        events: "Home game ends around 6:30 PM; expect a post-game rush. Clear skies, so open the patio.",
+        staffing: "Call in a 4th server 6–10 PM. Kevin's status to be decided.", prep: "Double batch of beer batter and tartar. Confirm the cod delivery by noon or keep Fish & Chips 86'd." },
+      summary: "Busy, wet night that peaked at 7 PM. The kitchen kept tickets under 18 minutes except during the 7 PM bar rush.",
+      wins: "Ana covered an extra section all night with zero complaints. Tasha ran expo through the rush.",
+      followups: "Monday: Kevin's no-show write-up. Order a walk-in gasket. Check on Marco's finger before his next shift.",
+    } },
+    { daysAgo: 1, shift: "Lunch", manager: "Declan Byrne", data: {
+      weather: "Cloudy", temp: "58", weather_notes: "",
+      sales: "1210", hours_from: 11, hours_to: 15,
+      hourly: { 11: 9, 12: 28, 13: 22, 14: 10, 15: 4 },
+      staffing: { foh_sched: "3", foh_actual: "3", boh_sched: "3", boh_actual: "3" },
+      employee: [
+        { dept: "BOH", name: "Sam Ortiz", type: "Late arrival", notes: "30 minutes late because of a bus delay.", action: "Talked it through; no write-up." },
+      ],
+      guest: [],
+      comps: [
+        { type: "Void: rung in wrong", item: "Corned Beef Reuben", amount: "16.00", reason: "Server rang it in twice", approved: "Declan" },
+      ],
+      eighty_six: "", maintenance: "Ice machine is making a grinding noise. Keep an eye on it.",
+      cash_over_short: "0", checks: { temps: true, cleaning: true },
+      forecast: { covers: "80", sales: "1300", reservations: "None on the books.", events: "", staffing: "Normal lunch crew.", prep: "Two batches of potato leek soup." },
+      summary: "Steady lunch with no real problems.", wins: "", followups: "Dinner team: cod delivery is short tonight, watch Fish & Chips counts.",
+    } },
   ],
 };

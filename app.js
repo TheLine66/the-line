@@ -86,6 +86,15 @@ let selectedDishId = null;     // Cost Tracker
 let editingDishId = null;      // Recipes ("new" for a new dish)
 let draft = null;              // working copy of the dish being edited
 let draftDirty = false;
+let staff = [];                // [{id, name, role, department, pay_type, rate, active}]
+let laborByWeek = new Map();   // "YYYY-MM-DD" -> Map(staffId -> hours)
+let modReports = [];           // newest first: [{id, report_date, shift, manager, data}]
+let extrasReady = true;        // false until supabase/labor-and-mod.sql has been run
+let laborWeek = null;          // week shown on the Labor Costs tab
+let laborRaise = { dept: "all", pct: 0 };  // what-if wage change (not saved)
+let editingReportId = null;    // MOD Report ("new" for a new report)
+let modDraft = null;           // working copy of the report being edited
+let modDirty = false;
 let activePage = "cost";
 let sign = 1;
 let authMode = "signin";
@@ -167,6 +176,8 @@ async function selectRestaurant(id) {
   selectedDishId = null;
   editingDishId = null;
   draft = null; draftDirty = false;
+  editingReportId = null; modDraft = null; modDirty = false;
+  laborWeek = null; laborRaise = { dept: "all", pct: 0 };
   await loadRestaurantData();
   renderRestaurantSelect();
   show("appScreen");
@@ -202,6 +213,37 @@ async function loadRestaurantData() {
   for (const k of Object.keys(adjustments)) if (!ingredients.has(k)) { delete adjustments[k]; delete priceMultipliers[k]; }
   if (!selectedWeek || !salesByWeek.has(selectedWeek)) selectedWeek = sortedWeeks()[0] || null;
   if (!dishes.some((d) => d.id === selectedDishId)) selectedDishId = dishes[0]?.id || null;
+  await loadExtras();
+}
+
+// The Labor + MOD tables come from a separate SQL file. If it hasn't been
+// run yet, the rest of the app still works and those two tabs explain why.
+function isMissingTable(err) {
+  return /PGRST205|42P01/.test(err?.code || "") || /schema cache|does not exist/i.test(err?.message || "");
+}
+
+async function loadExtras() {
+  const rid = rest.id;
+  const results = await Promise.all([
+    sb.from("staff").select("id,name,role,department,pay_type,rate,active").eq("restaurant_id", rid).order("created_at"),
+    sb.from("labor_hours").select("staff_id,week_start,hours").eq("restaurant_id", rid),
+    sb.from("mod_reports").select("id,report_date,shift,manager,data").eq("restaurant_id", rid)
+      .order("report_date", { ascending: false }).order("created_at", { ascending: false }),
+  ]);
+  const bad = results.find((r) => r.error);
+  if (bad && isMissingTable(bad.error)) { extrasReady = false; staff = []; laborByWeek = new Map(); modReports = []; return; }
+  if (bad) { toast(friendlyError(bad.error), "err"); throw bad.error; }
+  extrasReady = true;
+  const [st, hrs, reps] = results.map((r) => r.data);
+  const deptOrder = { Mgmt: 0, BOH: 1, FOH: 2 };
+  staff = st.map((x) => ({ ...x, rate: Number(x.rate) }))
+    .sort((a, b) => deptOrder[a.department] - deptOrder[b.department] || a.name.localeCompare(b.name));
+  laborByWeek = new Map();
+  for (const h of hrs) {
+    if (!laborByWeek.has(h.week_start)) laborByWeek.set(h.week_start, new Map());
+    laborByWeek.get(h.week_start).set(h.staff_id, Number(h.hours));
+  }
+  modReports = reps.sort((a, b) => b.report_date.localeCompare(a.report_date) || SHIFTS.indexOf(b.shift) - SHIFTS.indexOf(a.shift));
 }
 
 function sortedWeeks() { return [...salesByWeek.keys()].sort().reverse(); }
@@ -242,6 +284,32 @@ async function seedRestaurant(rid, key) {
       adjustments: Object.fromEntries(Object.entries(sc.adjustments).map(([k, v]) => [ingId(k), v]).filter(([id]) => id)),
     }))));
   }
+
+  // Sample team, timesheets and MOD reports. Skipped quietly if the
+  // Labor/MOD tables haven't been added yet (supabase/labor-and-mod.sql).
+  if (S.staff?.length) {
+    const ins = await sb.from("staff").insert(S.staff.map((p) => ({
+      restaurant_id: rid, name: p.name, role: p.role, department: p.department, pay_type: p.pay_type, rate: p.rate,
+    }))).select("id,name");
+    if (ins.error) { if (isMissingTable(ins.error)) return; toast(friendlyError(ins.error), "err"); throw ins.error; }
+    const staffId = new Map(ins.data.map((r) => [r.name, r.id]));
+    const hours = [];
+    S.weekFactors.forEach((f, w) => {
+      const week = addDays(thisMonday, -7 * (n - w));
+      S.staff.forEach((p) => hours.push({
+        restaurant_id: rid, staff_id: staffId.get(p.name), week_start: week,
+        hours: p.pay_type === "salary" ? p.hours : Math.round(p.hours * f * 2) / 2,
+      }));
+    });
+    await run(sb.from("labor_hours").insert(hours));
+  }
+  if (S.modReports?.length) {
+    const today = dayStr(new Date());
+    const { error } = await sb.from("mod_reports").insert(S.modReports.map((r) => ({
+      restaurant_id: rid, report_date: addDays(today, r.daysAgo * -1), shift: r.shift, manager: r.manager, data: r.data,
+    })));
+    if (error && !isMissingTable(error)) { toast(friendlyError(error), "err"); throw error; }
+  }
 }
 
 // ================================================================ CALCS
@@ -279,6 +347,8 @@ function render() {
   else if (activePage === "sales") renderSales();
   else if (activePage === "ingredients") renderIngredients();
   else if (activePage === "recipes") renderRecipes();
+  else if (activePage === "labor") renderLabor();
+  else if (activePage === "mod") renderMod();
 }
 
 function renderRestaurantSelect() {
@@ -366,13 +436,12 @@ function suggestedAction(dish, cost, pct) {
 }
 
 // A simple bar showing where this dish's food cost sits vs. the target zone.
-function targetBar(pct, st) {
-  const t = targets();
+function targetBar(pct, st, t = targets(), what = "Food cost") {
   const max = Math.max(50, Math.ceil((Math.max(pct, t.high) + 6) / 10) * 10);
   const at = (v) => Math.min(100, Math.max(0, (v / max) * 100)).toFixed(2);
   const zoneMid = ((t.low + t.high) / 2 / max) * 100;
   return `
-    <div class="gauge" role="img" aria-label="Food cost ${fmtPct(pct)}; target ${t.low} to ${t.high} percent">
+    <div class="gauge" role="img" aria-label="${what} ${fmtPct(pct)}; target ${t.low} to ${t.high} percent">
       <div class="gauge-track">
         <div class="gauge-zone" style="left:${at(t.low)}%;width:${(at(t.high) - at(t.low)).toFixed(2)}%"></div>
         <div class="gauge-mark ${st}" style="left:${at(pct)}%"><span>${fmtPct(pct)}</span></div>
@@ -842,6 +911,672 @@ async function deleteDish() {
   } catch { /* toast shown */ }
 }
 
+// ---------------------------------------------------------- Labor Costs
+const DEPTS = ["FOH", "BOH", "Mgmt"];
+const DEPT_LABEL = { FOH: "Front of house", BOH: "Back of house", Mgmt: "Management" };
+const OT_AFTER = 40;  // weekly hours before overtime (time and a half)
+
+function numOr(v, d) { const n = Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? d : n; }
+const laborTargets = () => ({ low: numOr(rest.labor_low, 25), mid: numOr(rest.labor_mid, 28), high: numOr(rest.labor_high, 32) });
+const laborBurden = () => numOr(rest.labor_burden, 10);
+function statusVs(pct, t) { return pct <= t.low ? "green" : pct <= t.high ? "amber" : "red"; }
+
+function setupCard(what) {
+  return `<h3>One more database step</h3>
+    <p>${what} needs three new database tables. In Supabase, open <strong>SQL Editor</strong> → <strong>New query</strong>, paste in everything from <code>supabase/labor-and-mod.sql</code>, click <strong>Run</strong>, then reload this page.</p>`;
+}
+
+// One person's wages for one week. Hourly staff get time and a half past 40 hours.
+function staffWages(s, hours, raisePct = 0) {
+  const rate = Number(s.rate) * (1 + raisePct / 100);
+  if (s.pay_type === "salary") return { ot: 0, wages: rate, otPremium: 0 };
+  const ot = Math.max(0, hours - OT_AFTER);
+  return { ot, wages: rate * (hours - ot) + rate * 1.5 * ot, otPremium: rate * 0.5 * ot };
+}
+function raiseFor(s) { return laborRaise.pct && (laborRaise.dept === "all" || laborRaise.dept === s.department) ? laborRaise.pct : 0; }
+
+// Labor totals for a week. "hours" is a Map(staffId -> hours) of who worked.
+function laborTotals(hours, withWhatIf = false) {
+  const burden = 1 + laborBurden() / 100;
+  const out = { hours: 0, hourlyHours: 0, hourlyCost: 0, ot: 0, otPremium: 0, wages: 0, total: 0, byDept: {} };
+  for (const d of DEPTS) out.byDept[d] = { hours: 0, total: 0 };
+  for (const s of staff) {
+    if (!hours.has(s.id)) continue;
+    const h = hours.get(s.id);
+    const w = staffWages(s, h, withWhatIf ? raiseFor(s) : 0);
+    const cost = w.wages * burden;
+    out.hours += h; out.wages += w.wages; out.total += cost;
+    out.ot += w.ot; out.otPremium += w.otPremium * burden;
+    if (s.pay_type !== "salary") { out.hourlyHours += h; out.hourlyCost += cost; }
+    out.byDept[s.department].hours += h;
+    out.byDept[s.department].total += cost;
+  }
+  return out;
+}
+
+// Sales and (real, not what-if) food cost for a week, from the Weekly Sales tab.
+function salesForWeek(week) {
+  const m = salesByWeek.get(week);
+  let revenue = 0, food = 0;
+  if (m) for (const d of dishes) {
+    const u = m.get(d.id) || 0;
+    revenue += u * d.price;
+    food += u * d.items.reduce((s, it) => s + (ingredients.get(it.ingredient_id)?.cost || 0) * it.qty, 0);
+  }
+  return { revenue, food };
+}
+
+function laborWeeks() { return [...laborByWeek.keys()].sort().reverse(); }
+
+function renderLabor() {
+  $("laborSetup").classList.toggle("hidden", extrasReady);
+  $("laborWrap").classList.toggle("hidden", !extrasReady);
+  if (!extrasReady) { $("laborSetup").innerHTML = setupCard("Labor Costs"); return; }
+  if (!laborWeek) laborWeek = laborWeeks()[0] || sortedWeeks()[0] || dayStr(mondayOf(new Date()));
+  $("laborWeek").value = laborWeek;
+  renderLaborSummary();
+  renderLaborHours();
+  renderStaffTable();
+  renderLaborWeeks();
+}
+
+function renderLaborSummary() {
+  const t = laborTargets();
+  const whatIf = laborRaise.pct !== 0;
+  const who = laborRaise.dept === "all" ? "All" : laborRaise.dept;
+  $("laborRaiseChip").innerHTML = whatIf
+    ? `<span class="chip ${laborRaise.pct > 0 ? "up" : "down"}">What-if: ${who} wages ${laborRaise.pct > 0 ? "+" : ""}${laborRaise.pct}% <button type="button" id="laborRaiseClear" aria-label="Remove what-if">✕</button></span>`
+    : "";
+  if (!laborByWeek.has(laborWeek)) {
+    $("laborMetrics").innerHTML = "";
+    $("laborSummary").innerHTML = `<p class="muted">No hours saved for the ${weekPhrase(laborWeek)} yet. Enter them under <strong>Hours worked</strong> and click <strong>Save hours</strong>.</p>`;
+    return;
+  }
+  const L = laborTotals(laborByWeek.get(laborWeek), whatIf);
+  const { revenue, food } = salesForWeek(laborWeek);
+  const pct = revenue ? (L.total / revenue) * 100 : null;
+  const prime = revenue ? ((L.total + food) / revenue) * 100 : null;
+  const st = pct === null ? "" : statusVs(pct, t);
+  $("laborMetrics").innerHTML = `
+    <div class="metric"><div class="num mono">${fmt0(L.total)}</div><div class="label">Labor cost${whatIf ? " (what-if)" : ""}, incl. ${laborBurden()}% taxes &amp; benefits</div></div>
+    <div class="metric ${st === "red" ? "warn" : st === "green" ? "good" : ""}"><div class="num mono">${pct === null ? "—" : fmtPct(pct)}</div><div class="label">Labor cost % of sales (target ${t.low}–${t.high}%)</div></div>
+    <div class="metric ${prime > 65 ? "warn" : ""}"><div class="num mono">${prime === null ? "—" : fmtPct(prime)}</div><div class="label">Prime cost % (food + labor; aim for 60–65% or less)</div></div>
+    <div class="metric"><div class="num mono">${revenue && L.hours ? fmt(revenue / L.hours) : "—"}</div><div class="label">Sales per labor hour</div></div>`;
+
+  if (!revenue) {
+    $("laborSummary").innerHTML = `<div class="action-box"><div class="tag">No sales for this week</div><p>Labor cost % compares labor to sales. Enter plates sold for the ${weekPhrase(laborWeek)} on the Weekly Sales tab to see it.</p></div>`;
+    return;
+  }
+  const deptRows = DEPTS.filter((d) => L.byDept[d].hours || L.byDept[d].total).map((d) => {
+    const x = L.byDept[d];
+    return `<tr><td>${DEPT_LABEL[d]}</td><td class="num mono">${trimNum(x.hours)}</td><td class="num mono">${fmt0(x.total)}</td>
+      <td class="num mono">${fmtPct((x.total / revenue) * 100)}</td><td class="num mono">${L.total ? fmtPct((x.total / L.total) * 100) : "—"}</td></tr>`;
+  }).join("");
+  const action = laborAction(L, revenue, pct, t);
+  $("laborSummary").innerHTML = `
+    ${targetBar(pct, st, t, "Labor cost")}
+    <div class="section-label">By department</div>
+    <table class="ingredients">
+      <thead><tr><th>Department</th><th class="num">Hours</th><th class="num">Labor $</th><th class="num">% of sales</th><th class="num">Share of labor</th></tr></thead>
+      <tbody>${deptRows}</tbody>
+      <tfoot><tr><td>Total</td><td class="num mono">${trimNum(L.hours)}</td><td class="num mono">${fmt0(L.total)}</td><td class="num mono">${fmtPct(pct)}</td><td></td></tr></tfoot>
+    </table>
+    <div class="section-label">Suggested action</div>
+    <div class="action-box ${action.ok ? "ok" : ""}"><div class="tag">${action.ok ? "No action needed" : "Labor running high"}</div><p>${action.text}</p></div>`;
+}
+
+function laborAction(L, revenue, pct, t) {
+  const otText = L.ot ? ` <strong>${trimNum(L.ot)} overtime hours</strong> cost ${fmt0(L.otPremium)} extra in time-and-a-half pay; spreading those shifts out would save that.` : "";
+  if (pct <= t.mid) {
+    const where = pct <= t.low ? `under your ${t.low}% target` : `inside your range and under your ${t.mid}% goal`;
+    return { ok: !L.ot, text: `Labor is ${fmtPct(pct)} of sales, ${where}.${otText}` };
+  }
+  const goal = revenue * (t.mid / 100);
+  const over = L.total - goal;
+  const avg = L.hourlyHours ? L.hourlyCost / L.hourlyHours : 0;
+  const moreSales = L.total / (t.mid / 100) - revenue;
+  let text = `${pct <= t.high ? "Trending high" : "Over target"}. At this week's sales (${fmt0(revenue)}), labor needs to be <strong>${fmt0(goal)}</strong> to hit your ${t.mid}% goal, which is <strong>${fmt0(over)}</strong> less.`;
+  if (avg) text += ` That's about <strong>${Math.ceil(over / avg)} fewer hourly staff hours</strong> (they cost ${fmt(avg)}/hr on average, incl. taxes), or about <strong>${fmt0(moreSales)}</strong> more in sales on the same schedule.`;
+  return { ok: false, text: text + otText };
+}
+
+// Hours already typed in the table (so re-drawing it doesn't lose them).
+function typedLaborHours() {
+  const typed = new Map();
+  document.querySelectorAll("#laborTable input[data-hours]").forEach((inp) => {
+    const paid = document.querySelector(`#laborTable input[data-paid="${inp.dataset.hours}"]`);
+    typed.set(inp.dataset.hours, { h: inp.value, paid: paid ? paid.checked : null });
+  });
+  return typed;
+}
+
+function renderLaborHours(typed = null) {
+  const saved = laborByWeek.get(laborWeek);
+  $("laborWeekNote").textContent = saved ? "Saved hours loaded — edit and save again to update." : "Nothing saved for this week yet.";
+  const people = staff.filter((s) => s.active || saved?.has(s.id));
+  if (!people.length) {
+    $("laborTable").innerHTML = `<tbody><tr><td class="muted">Add your team under <strong>Your team</strong> first.</td></tr></tbody>`;
+    updateLaborTotal();
+    return;
+  }
+  const body = DEPTS.map((dep) => {
+    const list = people.filter((s) => s.department === dep);
+    if (!list.length) return "";
+    return `<tr class="group"><td colspan="6">${DEPT_LABEL[dep]}</td></tr>` + list.map((s) => {
+      const tv = typed?.get(s.id);
+      const h = tv ? tv.h : saved?.has(s.id) ? trimNum(saved.get(s.id)) : "";
+      const salary = s.pay_type === "salary";
+      const paid = tv && tv.paid !== null ? tv.paid : saved ? saved.has(s.id) : s.active;
+      return `<tr>
+        <td>${esc(s.name)}</td><td class="used">${esc(s.role)}</td>
+        <td class="num mono">${salary
+          ? `${fmt(s.rate)}/wk <label class="paid"><input type="checkbox" data-paid="${s.id}" ${paid ? "checked" : ""}> Paid</label>`
+          : `${fmt(s.rate)}/hr`}</td>
+        <td class="num"><input class="num mono" type="number" min="0" max="168" step="0.25" inputmode="decimal" data-hours="${s.id}" value="${h}" placeholder="${salary ? "optional" : "—"}" aria-label="Hours for ${esc(s.name)}"></td>
+        <td class="num mono" data-ot="${s.id}"></td>
+        <td class="num mono" data-wage="${s.id}"></td>
+      </tr>`;
+    }).join("");
+  }).join("");
+  $("laborTable").innerHTML = `
+    <thead><tr><th>Name</th><th>Role</th><th class="num">Pay</th><th class="num">Hours</th><th class="num">Overtime</th><th class="num">Wages</th></tr></thead>
+    <tbody>${body}</tbody>`;
+  updateLaborTotal();
+}
+
+// Reads the hours table: Map(staffId -> hours) of everyone being paid this week.
+function laborFromTable() {
+  const m = new Map();
+  for (const s of staff) {
+    const inp = document.querySelector(`#laborTable input[data-hours="${s.id}"]`);
+    if (!inp) continue;
+    const h = inp.value.trim() === "" ? null : Number(inp.value);
+    if (s.pay_type === "salary") {
+      if (document.querySelector(`#laborTable input[data-paid="${s.id}"]`)?.checked) m.set(s.id, Number.isFinite(h) && h > 0 ? h : 0);
+    } else if (h !== null && Number.isFinite(h)) m.set(s.id, h);
+  }
+  return m;
+}
+
+function updateLaborTotal() {
+  const m = laborFromTable();
+  for (const s of staff) {
+    const otCell = document.querySelector(`[data-ot="${s.id}"]`), wageCell = document.querySelector(`[data-wage="${s.id}"]`);
+    if (!wageCell) continue;
+    const w = m.has(s.id) ? staffWages(s, m.get(s.id)) : null;
+    otCell.textContent = w && w.ot ? trimNum(w.ot) + " h" : "";
+    wageCell.textContent = w ? fmt(w.wages) : "—";
+  }
+  const L = laborTotals(m);
+  const { revenue } = salesForWeek(laborWeek);
+  $("laborTotal").textContent = m.size
+    ? `${trimNum(L.hours)} hours · ${fmt0(L.wages)} wages + ${laborBurden()}% taxes & benefits = ${fmt0(L.total)}` + (revenue ? ` · ${fmtPct((L.total / revenue) * 100)} of sales` : "")
+    : "";
+}
+
+async function saveLabor() {
+  const rows = [], removes = [];
+  for (const s of staff) {
+    const inp = document.querySelector(`#laborTable input[data-hours="${s.id}"]`);
+    if (!inp) continue;
+    const raw = inp.value.trim();
+    const h = raw === "" ? null : Number(raw);
+    if (h !== null && (!Number.isFinite(h) || h < 0 || h > 168)) { toast("Hours must be between 0 and 168.", "err"); inp.focus(); return; }
+    const paid = s.pay_type === "salary" ? document.querySelector(`#laborTable input[data-paid="${s.id}"]`)?.checked : h !== null;
+    if (paid) rows.push({ restaurant_id: rest.id, staff_id: s.id, week_start: laborWeek, hours: h ?? 0 });
+    else removes.push(s.id);
+  }
+  if (!rows.length) { toast("Enter hours for at least one person first.", "err"); return; }
+  const btn = $("saveLaborBtn");
+  btn.disabled = true;
+  try {
+    await run(sb.from("labor_hours").upsert(rows, { onConflict: "staff_id,week_start" }));
+    const had = laborByWeek.get(laborWeek);
+    const gone = removes.filter((id) => had?.has(id));
+    if (gone.length) await run(sb.from("labor_hours").delete().eq("restaurant_id", rest.id).eq("week_start", laborWeek).in("staff_id", gone));
+    await loadExtras();
+    renderLabor();
+    toast(`Saved hours for the ${weekPhrase(laborWeek)}.`);
+  } catch { /* toast shown */ } finally { btn.disabled = false; }
+}
+
+function copyLastWeek() {
+  const prev = laborWeeks().find((w) => w < laborWeek);
+  if (!prev) { toast("There's no earlier week with hours to copy.", "err"); return; }
+  const m = laborByWeek.get(prev);
+  const typed = new Map(staff.map((s) => [s.id, { h: m.has(s.id) ? trimNum(m.get(s.id)) : "", paid: m.has(s.id) }]));
+  renderLaborHours(typed);
+  toast(`Copied hours from the ${weekPhrase(prev)}. Click "Save hours" to keep them.`);
+}
+
+function renderStaffTable() {
+  if (!staff.length) { $("staffTable").innerHTML = `<tbody><tr><td class="muted">No one on the team yet — add people above.</td></tr></tbody>`; return; }
+  const deptOpts = (v) => DEPTS.map((d) => `<option value="${d}" ${d === v ? "selected" : ""}>${DEPT_LABEL[d]}</option>`).join("");
+  $("staffTable").innerHTML = `
+    <thead><tr><th>Name</th><th>Role</th><th>Department</th><th>Pay</th><th class="num">Rate ($)</th><th>Active</th><th></th></tr></thead>
+    <tbody>${staff.map((s) => `<tr>
+      <td><input data-sid="${s.id}" data-field="name" value="${esc(s.name)}" maxlength="100" aria-label="Name"></td>
+      <td><input data-sid="${s.id}" data-field="role" value="${esc(s.role)}" maxlength="40" list="roleList" aria-label="Role"></td>
+      <td><select data-sid="${s.id}" data-field="department" aria-label="Department">${deptOpts(s.department)}</select></td>
+      <td><select data-sid="${s.id}" data-field="pay_type" aria-label="Pay type">
+        <option value="hourly" ${s.pay_type === "hourly" ? "selected" : ""}>Hourly</option>
+        <option value="salary" ${s.pay_type === "salary" ? "selected" : ""}>Salary (per week)</option></select></td>
+      <td class="num" style="width:120px"><input class="num mono" data-sid="${s.id}" data-field="rate" type="number" min="0" step="0.01" value="${trimNum(s.rate)}" aria-label="Rate"></td>
+      <td><input type="checkbox" data-sid="${s.id}" data-field="active" ${s.active ? "checked" : ""} aria-label="Active"></td>
+      <td class="num"><button class="iconbtn" data-del-staff="${s.id}" type="button" aria-label="Delete ${esc(s.name)}">✕</button></td>
+    </tr>`).join("")}</tbody>`;
+}
+
+async function addStaff(e) {
+  e.preventDefault();
+  const name = $("newStaffName").value.trim(), role = $("newStaffRole").value.trim(), rate = Number($("newStaffRate").value);
+  if (!name || $("newStaffRate").value === "" || !Number.isFinite(rate) || rate < 0) { toast("Fill in a name and a pay rate of 0 or more.", "err"); return; }
+  try {
+    const typed = typedLaborHours();
+    await run(sb.from("staff").insert({ restaurant_id: rest.id, name, role, department: $("newStaffDept").value, pay_type: $("newStaffPay").value, rate }));
+    await loadExtras();
+    $("newStaffName").value = ""; $("newStaffRole").value = ""; $("newStaffRate").value = "";
+    $("newStaffName").focus();
+    renderStaffTable(); renderLaborHours(typed); renderLaborSummary(); renderLaborWeeks();
+    toast(`Added ${name}.`);
+  } catch { /* toast shown */ }
+}
+
+async function updateStaff(input) {
+  const s = staff.find((x) => x.id === input.dataset.sid);
+  if (!s) return;
+  const field = input.dataset.field;
+  let val = input.type === "checkbox" ? input.checked : input.value.trim();
+  if (field === "rate") {
+    val = Number(val);
+    if (input.value.trim() === "" || !Number.isFinite(val) || val < 0) { toast("Rate must be a number, 0 or more.", "err"); input.value = trimNum(s.rate); return; }
+  } else if (field === "name" && !val) { toast("Name can't be blank.", "err"); input.value = s.name; return; }
+  if (val === s[field]) return;
+  try {
+    const typed = typedLaborHours();
+    await run(sb.from("staff").update({ [field]: val }).eq("id", s.id));
+    await loadExtras();
+    renderLaborHours(typed); renderLaborSummary(); renderLaborWeeks();
+    if (field === "department") renderStaffTable();
+    toast(`Saved ${s.name}.`);
+  } catch { input.type === "checkbox" ? (input.checked = s[field]) : (input.value = field === "rate" ? trimNum(s.rate) : s[field]); }
+}
+
+async function deleteStaff(id) {
+  const s = staff.find((x) => x.id === id);
+  if (!s || !confirm(`Delete ${s.name}? Their hours in every past week are deleted too.\n\nTip: untick "Active" instead to hide them but keep history.`)) return;
+  try {
+    const typed = typedLaborHours();
+    await run(sb.from("staff").delete().eq("id", id));
+    await loadExtras();
+    renderStaffTable(); renderLaborHours(typed); renderLaborSummary(); renderLaborWeeks();
+    toast(`Deleted ${s.name}.`);
+  } catch { /* toast shown */ }
+}
+
+function renderLaborWeeks() {
+  const weeks = laborWeeks();
+  const t = laborTargets();
+  $("laborWeeksTable").innerHTML = weeks.length ? `
+    <thead><tr><th>Week</th><th class="num">Hours</th><th class="num">Labor $</th><th class="num">Sales</th><th class="num">Labor %</th><th class="num">Prime cost %</th><th></th></tr></thead>
+    <tbody>${weeks.map((w) => {
+      const L = laborTotals(laborByWeek.get(w));
+      const { revenue, food } = salesForWeek(w);
+      const pct = revenue ? (L.total / revenue) * 100 : null;
+      return `<tr><td>${fmtWeek(w)}</td><td class="num mono">${trimNum(L.hours)}</td><td class="num mono">${fmt0(L.total)}</td>
+        <td class="num mono">${revenue ? fmt0(revenue) : "—"}</td>
+        <td class="num mono">${pct === null ? "—" : `<span class="dot ${statusVs(pct, t)}" style="margin-right:6px"></span>${fmtPct(pct)}`}</td>
+        <td class="num mono">${revenue ? fmtPct(((L.total + food) / revenue) * 100) : "—"}</td>
+        <td class="num"><button class="linkbtn" data-labor-week="${w}" type="button">${w === laborWeek ? "Showing" : "Open"}</button></td></tr>`;
+    }).join("")}</tbody>` : `<tbody><tr><td class="muted">No weeks saved yet.</td></tr></tbody>`;
+}
+
+function setLaborWeek(w) {
+  laborWeek = w;
+  renderLabor();
+}
+
+// ---------------------------------------------------------- MOD Report
+const SHIFTS = ["Breakfast", "Brunch", "Lunch", "Dinner", "Late night", "All day"];
+const WEATHER = ["Sunny", "Partly cloudy", "Cloudy", "Rain", "Thunderstorms", "Snow / ice", "Fog", "Windy", "Extreme heat", "Extreme cold"];
+const EMP_ISSUES = ["Called out sick", "No call / no show", "Late arrival", "Left early / sent home", "Injury: cut", "Injury: burn",
+  "Injury: slip or fall", "Coworker dispute", "Guest complaint about employee", "Conduct / policy issue", "Other"];
+const GUEST_ISSUES = ["Guest injury / accident", "Food: undercooked", "Food: overcooked / wrong temp", "Food: quality or taste",
+  "Foreign object in food", "Allergy concern", "Wrong order", "Slow service / long wait", "Staff attitude", "Billing / payment issue", "Other"];
+const COMP_TYPES = ["Comp: VIP / regular", "Comp: kitchen mistake", "Comp: service mistake", "Void: rung in wrong", "Recook",
+  "Refund", "Event", "Buyout", "Employee / manager meal", "Promo / marketing", "Other"];
+const CHECKS = [["temps", "Temperature logs done"], ["cleaning", "Cleaning checklist done"], ["deposit", "Cash deposit made"], ["alarm", "Doors locked & alarm set"]];
+const LIST_ROWS = {
+  employee: () => ({ dept: "FOH", name: "", type: "", notes: "", action: "" }),
+  guest: () => ({ type: "", table: "", notes: "", resolution: "" }),
+  comps: () => ({ type: "", item: "", amount: "", reason: "", approved: "" }),
+};
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function fmtHour(h) { h %= 24; return h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`; }
+function fmtReportDay(s) { return parseDay(s).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }); }
+
+function blankReportData() {
+  return {
+    weather: "", temp: "", weather_notes: "", sales: "", hours_from: 11, hours_to: 22, hourly: {},
+    staffing: { foh_sched: "", foh_actual: "", boh_sched: "", boh_actual: "" },
+    employee: [], guest: [], comps: [], eighty_six: "", maintenance: "",
+    cash_over_short: "", checks: {},
+    forecast: { covers: "", sales: "", reservations: "", events: "", staffing: "", prep: "" },
+    summary: "", wins: "", followups: "",
+  };
+}
+
+function reportFrom(r) {
+  const b = blankReportData(), d = r.data || {};
+  return {
+    id: r.id, report_date: r.report_date, shift: r.shift, manager: r.manager || "",
+    data: { ...b, ...clone(d), staffing: { ...b.staffing, ...(d.staffing || {}) }, forecast: { ...b.forecast, ...(d.forecast || {}) } },
+  };
+}
+
+function startReport(id) {
+  if (modDirty && !confirm("You have unsaved changes to this report. Throw them away?")) return false;
+  editingReportId = id;
+  if (id === "new") {
+    const now = new Date();
+    const last = modReports[0];
+    modDraft = { id: null, report_date: dayStr(now), shift: now.getHours() < 16 ? "Lunch" : "Dinner", manager: last?.manager || "", data: blankReportData() };
+    if (last?.data?.hours_from !== undefined) { modDraft.data.hours_from = last.data.hours_from; modDraft.data.hours_to = last.data.hours_to; }
+  } else {
+    const r = modReports.find((x) => x.id === id);
+    modDraft = r ? reportFrom(r) : null;
+  }
+  modDirty = false;
+  return true;
+}
+
+function reportStats(d) {
+  let covers = 0, peak = null, rush = null;
+  const c = (h) => Number(d.hourly[h]) || 0;
+  for (let h = d.hours_from; h <= d.hours_to; h++) {
+    covers += c(h);
+    if (c(h) > 0 && (!peak || c(h) > peak.covers)) peak = { h, covers: c(h) };
+    if (h < d.hours_to && c(h) + c(h + 1) > 0 && (!rush || c(h) + c(h + 1) > rush.covers)) rush = { h, covers: c(h) + c(h + 1) };
+  }
+  const comps = (d.comps || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const sales = Number(d.sales) || 0;
+  const injuries = [...(d.employee || []), ...(d.guest || [])].filter((x) => /injury/i.test(x.type)).length;
+  return { covers, peak, rush, comps, sales, avgCheck: covers && sales ? sales / covers : 0,
+    emp: (d.employee || []).length, guest: (d.guest || []).length, injuries };
+}
+
+function renderMod() {
+  if (!extrasReady) {
+    $("modMetrics").innerHTML = "";
+    $("reportList").innerHTML = `<div class="rail-empty">Not set up yet.</div>`;
+    $("modEditor").className = "panel";
+    $("modEditor").innerHTML = setupCard("The MOD Report");
+    return;
+  }
+  if (editingReportId !== "new" && !modReports.some((r) => r.id === editingReportId)) { editingReportId = null; modDraft = null; modDirty = false; }
+  if (!modDraft) startReport(modReports[0]?.id || "new");
+  renderModMetrics();
+  renderReportList();
+  renderModEditor();
+}
+
+function renderModMetrics() {
+  const since = addDays(dayStr(new Date()), -6);
+  const recent = modReports.filter((r) => r.report_date >= since).map((r) => reportStats(reportFrom(r).data));
+  if (!modReports.length) { $("modMetrics").innerHTML = ""; return; }
+  const sum = (k) => recent.reduce((s, x) => s + x[k], 0);
+  const inj = sum("injuries");
+  $("modMetrics").innerHTML = `
+    <div class="metric"><div class="num mono">${sum("covers").toLocaleString()}</div><div class="label">Covers, last 7 days (${recent.length} report${recent.length === 1 ? "" : "s"})</div></div>
+    <div class="metric"><div class="num mono">${fmt0(sum("comps"))}</div><div class="label">Comps, voids &amp; refunds, last 7 days</div></div>
+    <div class="metric ${sum("emp") ? "warn" : ""}"><div class="num mono">${sum("emp")}</div><div class="label">Employee issues, last 7 days</div></div>
+    <div class="metric ${sum("guest") ? "warn" : ""}"><div class="num mono">${sum("guest")}</div><div class="label">Guest issues, last 7 days${inj ? ` · ${inj} injur${inj === 1 ? "y" : "ies"}` : ""}</div></div>`;
+}
+
+function renderReportList() {
+  const draftRow = editingReportId === "new"
+    ? `<button type="button" class="dish-row selected"><span class="info"><span class="name">${fmtReportDay(modDraft.report_date || dayStr(new Date()))} · ${esc(modDraft.shift)}</span><span class="cat">New report, not saved yet</span></span></button>`
+    : "";
+  $("reportList").innerHTML = draftRow + (modReports.map((r) => {
+    const st = reportStats(reportFrom(r).data);
+    const issues = st.emp + st.guest;
+    const dot = st.injuries ? "red" : issues ? "amber" : "green";
+    const bits = [r.manager, st.covers ? `${st.covers} covers` : "", st.sales ? fmt0(st.sales) : "", issues ? `${issues} issue${issues === 1 ? "" : "s"}` : "no issues"].filter(Boolean);
+    return `<button type="button" class="dish-row ${r.id === editingReportId ? "selected" : ""}" data-report="${r.id}">
+        <span class="dot ${dot}"></span>
+        <span class="info"><span class="name">${fmtReportDay(r.report_date)} · ${esc(r.shift)}</span><span class="cat">${esc(bits.join(" · "))}</span></span>
+      </button>`;
+  }).join("") || (draftRow ? "" : `<div class="rail-empty">No reports yet.</div>`));
+}
+
+function renderModEditor() {
+  const el = $("modEditor");
+  el.className = "panel mod";
+  const r = modDraft, d = r.data;
+  const opts = (list, v, blank) => (blank ? `<option value="">${blank}</option>` : "") +
+    list.map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("");
+  const hourOpts = (from, to, v) => { let o = ""; for (let h = from; h <= to; h++) o += `<option value="${h}" ${h === v ? "selected" : ""}>${fmtHour(h)}</option>`; return o; };
+  const input = (label, path, val, attrs = "") => `<label>${label}<input data-f="${path}" value="${esc(val)}" ${attrs}></label>`;
+  const area = (label, path, val, ph) => `<label class="wide">${label}<textarea data-f="${path}" rows="3" placeholder="${esc(ph)}">${esc(val)}</textarea></label>`;
+  // Each issue / comp is a small card: short fields side by side, long ones full width.
+  const rowsTable = (list, cols, addLabel, empty) => {
+    const cards = d[list].map((row, i) => `<div class="row-card">
+        <button class="iconbtn" data-del-row="${list}:${i}" type="button" aria-label="Remove this line">✕</button>
+        <div class="form-grid">${cols.map((c) => `<label${c.wide ? ` class="wide"` : ""}>${c.label}${c.options
+          ? `<select data-row="${list}" data-i="${i}" data-k="${c.k}">${opts(c.options, row[c.k], c.blank)}</select>`
+          : `<input data-row="${list}" data-i="${i}" data-k="${c.k}" value="${esc(row[c.k])}" placeholder="${esc(c.ph || "")}" ${c.money ? `type="number" step="0.01" min="0" class="mono"` : `maxlength="300"`}>`}</label>`).join("")}
+        </div></div>`).join("");
+    return (cards || `<p class="muted small">${empty}</p>`) + `<button class="ghostbtn dark" data-add="${list}" type="button">${addLabel}</button>`;
+  };
+  const hours = [];
+  for (let h = d.hours_from; h <= d.hours_to; h++) hours.push(h);
+
+  // Same shift, one week before tomorrow: a starting point for the forecast.
+  const ref = modReports.find((x) => x.report_date === addDays(r.report_date || dayStr(new Date()), -6) && x.shift === r.shift);
+  const refStats = ref ? reportStats(reportFrom(ref).data) : null;
+  const tomorrow = r.report_date ? parseDay(addDays(r.report_date, 1)).toLocaleDateString(undefined, { weekday: "long" }) : "tomorrow";
+
+  el.innerHTML = `
+    <div class="panel-head">
+      <div><h2>${esc(rest.name)}: MOD report</h2><div class="cat">${r.id ? "Saved report. Changes are kept when you click \"Save report\"." : "New report. Nothing is saved until you click \"Save report\"."}</div></div>
+    </div>
+    <div class="form-grid">
+      ${input("Date", "report_date", r.report_date, `type="date" required`)}
+      <label>Shift<select data-f="shift">${opts(SHIFTS, r.shift)}</select></label>
+      ${input("Manager on duty", "manager", r.manager, `maxlength="100" placeholder="Your name" id="modManager"`)}
+      ${input("Net sales ($)", "data.sales", d.sales, `type="number" min="0" step="0.01" placeholder="From the POS"`)}
+    </div>
+    <div class="preview" id="modSummary"></div>
+
+    <div class="mod-section">
+      <div class="section-label">Weather</div>
+      <div class="form-grid">
+        <label>Conditions<select data-f="data.weather">${opts(WEATHER, d.weather, "Choose…")}</select></label>
+        ${input("Temperature (°F)", "data.temp", d.temp, `type="number" step="1" placeholder="e.g. 72"`)}
+        ${input("How it affected business", "data.weather_notes", d.weather_notes, `maxlength="300" class="wide-input" placeholder="e.g. Patio closed at 6 PM"`)}
+      </div>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Covers (guests) by hour</div>
+      <div class="toolbar">
+        <label class="stack">First hour<select data-f="data.hours_from">${hourOpts(5, 23, d.hours_from)}</select></label>
+        <label class="stack">Last hour<select data-f="data.hours_to">${hourOpts(d.hours_from, 27, d.hours_to)}</select></label>
+      </div>
+      <table class="hours">
+        <thead><tr><th>Hour</th><th class="num">Covers</th><th></th></tr></thead>
+        <tbody>${hours.map((h) => `<tr data-hrow="${h}"><td>${fmtHour(h)}–${fmtHour(h + 1)}</td>
+          <td class="num"><input type="number" min="0" step="1" inputmode="numeric" class="num mono" data-hour="${h}" value="${esc(d.hourly[h] ?? "")}" placeholder="—" aria-label="Covers ${fmtHour(h)}"></td>
+          <td class="barcell"><span class="hbar" data-bar="${h}"></span></td></tr>`).join("")}</tbody>
+        <tfoot><tr><td>Total</td><td class="num mono" id="coverTotal"></td><td class="note" id="peakNote"></td></tr></tfoot>
+      </table>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Staffing</div>
+      <div class="form-grid">
+        ${input("FOH scheduled", "data.staffing.foh_sched", d.staffing.foh_sched, `type="number" min="0" step="1"`)}
+        ${input("FOH showed up", "data.staffing.foh_actual", d.staffing.foh_actual, `type="number" min="0" step="1"`)}
+        ${input("BOH scheduled", "data.staffing.boh_sched", d.staffing.boh_sched, `type="number" min="0" step="1"`)}
+        ${input("BOH showed up", "data.staffing.boh_actual", d.staffing.boh_actual, `type="number" min="0" step="1"`)}
+      </div>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Employee issues <span class="note" id="empCounts"></span></div>
+      ${rowsTable("employee", [
+        { k: "dept", label: "Department", options: DEPTS },
+        { k: "name", label: "Employee", ph: "Name" },
+        { k: "type", label: "Issue", options: EMP_ISSUES, blank: "Choose…" },
+        { k: "notes", label: "What happened", ph: "e.g. Cut finger on mandoline, 6:40 PM", wide: true },
+        { k: "action", label: "Action taken", ph: "e.g. First aid, incident form filed", wide: true },
+      ], "+ Add employee issue", "No employee issues this shift.")}
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Guest issues</div>
+      ${rowsTable("guest", [
+        { k: "type", label: "Issue", options: GUEST_ISSUES, blank: "Choose…" },
+        { k: "table", label: "Table / guest", ph: "e.g. Table 12" },
+        { k: "notes", label: "What happened", ph: "e.g. Burger ordered medium came out rare", wide: true },
+        { k: "resolution", label: "How it was resolved", ph: "e.g. Recooked, comped dessert", wide: true },
+      ], "+ Add guest issue", "No guest issues this shift.")}
+      <p class="note">Any injury (guest or employee): write up an incident report tonight, with times and witness names, and tell the owner.</p>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Comps, voids &amp; refunds <span class="note" id="compTotal"></span></div>
+      ${rowsTable("comps", [
+        { k: "type", label: "Type", options: COMP_TYPES, blank: "Choose…" },
+        { k: "item", label: "Item(s)", ph: "e.g. Sticky Toffee Pudding" },
+        { k: "amount", label: "Amount ($)", money: true },
+        { k: "reason", label: "Reason", ph: "e.g. Recook for Table 12", wide: true },
+        { k: "approved", label: "Approved by", ph: "Manager" },
+      ], "+ Add comp / void", "No comps or voids this shift.")}
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Kitchen &amp; building</div>
+      <div class="form-grid">
+        ${area("86'd items &amp; low stock", "data.eighty_six", d.eighty_six, "e.g. Fish & Chips 86'd at 9:15 PM, cod short 10 lb")}
+        ${area("Equipment &amp; maintenance", "data.maintenance", d.maintenance, "e.g. Walk-in door gasket torn; fryer 2 slow to heat")}
+      </div>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Cash &amp; closing</div>
+      <div class="form-grid">
+        ${input("Cash over (+) / short (−) ($)", "data.cash_over_short", d.cash_over_short, `type="number" step="0.01" placeholder="0.00"`)}
+      </div>
+      <div class="checks">${CHECKS.map(([k, label]) => `<label class="check"><input type="checkbox" data-f="data.checks.${k}" ${d.checks[k] ? "checked" : ""}> ${label}</label>`).join("")}</div>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Forecast for tomorrow's shift (${tomorrow})</div>
+      ${refStats ? `<p class="note">Last ${tomorrow}'s ${esc(r.shift)}: ${refStats.covers} covers${refStats.sales ? `, ${fmt0(refStats.sales)} in sales` : ""}.</p>` : ""}
+      <div class="form-grid">
+        ${input("Expected covers", "data.forecast.covers", d.forecast.covers, `type="number" min="0" step="1"`)}
+        ${input("Expected sales ($)", "data.forecast.sales", d.forecast.sales, `type="number" min="0" step="1"`)}
+        ${area("Reservations &amp; large parties", "data.forecast.reservations", d.forecast.reservations, "e.g. Party of 14 at 7 PM")}
+        ${area("Events, weather &amp; outside factors", "data.forecast.events", d.forecast.events, "e.g. Home game ends 6:30 PM, expect a rush")}
+        ${area("Staffing plan", "data.forecast.staffing", d.forecast.staffing, "e.g. Add a 4th server 6–10 PM")}
+        ${area("Prep &amp; ordering", "data.forecast.prep", d.forecast.prep, "e.g. Double batch of batter; confirm cod delivery")}
+      </div>
+    </div>
+
+    <div class="mod-section">
+      <div class="section-label">Shift notes</div>
+      <div class="form-grid">
+        ${area("Shift summary", "data.summary", d.summary, "How the shift went overall")}
+        ${area("Wins &amp; shout-outs", "data.wins", d.wins, "Who went above and beyond")}
+        ${area("Follow-ups for the next manager", "data.followups", d.followups, "What needs to happen next")}
+      </div>
+    </div>
+
+    <div class="row-actions">
+      <button class="applybtn" id="saveReportBtn" type="button">Save report</button>
+      <button class="ghostbtn dark" id="printReportBtn" type="button">Print / save as PDF</button>
+      <span class="spacer"></span>
+      ${r.id ? `<button class="linkbtn danger" id="deleteReportBtn" type="button">Delete report</button>` : ""}
+    </div>`;
+  updateModSummary();
+}
+
+function updateModSummary() {
+  const d = modDraft.data;
+  const s = reportStats(d);
+  const max = Math.max(1, ...Object.keys(d.hourly).map((h) => (h >= d.hours_from && h <= d.hours_to ? Number(d.hourly[h]) || 0 : 0)));
+  document.querySelectorAll("#modEditor [data-bar]").forEach((bar) => {
+    const h = Number(bar.dataset.bar), c = Number(d.hourly[h]) || 0;
+    bar.style.width = `${(c / max) * 100}%`;
+    bar.closest("tr").classList.toggle("peak", !!s.peak && c === s.peak.covers);
+  });
+  $("coverTotal").textContent = s.covers;
+  $("peakNote").textContent = s.peak
+    ? `Peak: ${fmtHour(s.peak.h)} (${s.peak.covers})` + (s.rush ? ` · busiest 2 hours: ${fmtHour(s.rush.h)}–${fmtHour(s.rush.h + 2)} (${s.rush.covers})` : "")
+    : "";
+  const byDept = DEPTS.map((dep) => [dep, d.employee.filter((x) => x.dept === dep).length]).filter(([, n]) => n);
+  $("empCounts").textContent = byDept.length ? "· " + byDept.map(([dep, n]) => `${dep}: ${n}`).join(" · ") : "";
+  $("compTotal").textContent = s.comps ? `· ${fmt(s.comps)} total` + (s.sales ? ` (${fmtPct((s.comps / s.sales) * 100)} of sales)` : "") : "";
+  $("modSummary").innerHTML = `
+    <div><div class="val mono">${s.covers}</div><div class="lbl">Covers</div></div>
+    <div><div class="val mono">${s.sales ? fmt0(s.sales) : "—"}</div><div class="lbl">Net sales</div></div>
+    <div><div class="val mono">${s.avgCheck ? fmt(s.avgCheck) : "—"}</div><div class="lbl">Average per guest</div></div>
+    <div><div class="val mono">${s.peak ? fmtHour(s.peak.h) : "—"}</div><div class="lbl">Peak hour</div></div>
+    <div><div class="val mono">${fmt(s.comps)}</div><div class="lbl">Comps &amp; voids</div></div>
+    <div><div class="val mono">${s.emp + s.guest}</div><div class="lbl">Issues${s.injuries ? ` (${s.injuries} injury)` : ""}</div></div>`;
+}
+
+function setPath(obj, path, val) {
+  const keys = path.split(".");
+  let o = obj;
+  for (const k of keys.slice(0, -1)) o = o[k] ??= {};
+  o[keys.at(-1)] = val;
+}
+
+async function saveReport() {
+  const r = modDraft;
+  if (!r.report_date) { toast("Pick the date for this report.", "err"); return; }
+  if (!r.manager.trim()) { toast("Add the manager on duty's name.", "err"); $("modManager")?.focus(); return; }
+  const data = clone(r.data);
+  // Drop lines that were added but never filled in.
+  for (const k of Object.keys(LIST_ROWS)) data[k] = data[k].filter((row) => Object.entries(row).some(([f, v]) => f !== "dept" && String(v ?? "").trim() !== ""));
+  for (const k of ["employee", "guest", "comps"]) {
+    if (data[k].some((row) => !row.type)) { toast(`Pick a type for every line under ${k === "comps" ? "Comps, voids & refunds" : k === "guest" ? "Guest issues" : "Employee issues"}.`, "err"); return; }
+  }
+  data.hourly = Object.fromEntries(Object.entries(data.hourly).filter(([h, v]) => h >= data.hours_from && h <= data.hours_to && String(v).trim() !== ""));
+  const row = { restaurant_id: rest.id, report_date: r.report_date, shift: r.shift, manager: r.manager.trim(), data, updated_at: new Date().toISOString() };
+  const btn = $("saveReportBtn");
+  btn.disabled = true;
+  try {
+    const res = r.id
+      ? await sb.from("mod_reports").update(row).eq("id", r.id).select("id").single()
+      : await sb.from("mod_reports").insert(row).select("id").single();
+    if (res.error) {
+      toast(res.error.code === "23505" ? `There's already a ${r.shift} report for ${fmtReportDay(r.report_date)}. Open it from the list, or pick a different shift.` : friendlyError(res.error), "err");
+      return;
+    }
+    await loadExtras();
+    modDirty = false;
+    startReport(res.data.id);
+    renderMod();
+    toast(`Saved the ${r.shift} report for ${fmtReportDay(r.report_date)}.`);
+  } finally { if (document.body.contains(btn)) btn.disabled = false; }
+}
+
+async function deleteReport() {
+  const r = modDraft;
+  if (!r?.id || !confirm(`Delete the ${r.shift} report for ${fmtReportDay(r.report_date)}? This can't be undone.`)) return;
+  try {
+    await run(sb.from("mod_reports").delete().eq("id", r.id));
+    modDirty = false; modDraft = null; editingReportId = null;
+    await loadExtras();
+    renderMod();
+    toast("Report deleted.");
+  } catch { /* toast shown */ }
+}
+
 // ---------------------------------------------------------- What-if + scenarios
 function resetWhatIf() {
   adjustments = {}; priceMultipliers = {};
@@ -936,6 +1671,14 @@ function openSettings() {
   $("setLow").value = Number(rest.target_low);
   $("setMid").value = Number(rest.target_mid);
   $("setHigh").value = Number(rest.target_high);
+  const hasLabor = "labor_low" in rest;
+  $("laborSettings").classList.toggle("hidden", !hasLabor);
+  if (hasLabor) {
+    $("setLaborLow").value = Number(rest.labor_low);
+    $("setLaborMid").value = Number(rest.labor_mid);
+    $("setLaborHigh").value = Number(rest.labor_high);
+    $("setBurden").value = Number(rest.labor_burden);
+  }
   $("settingsMsg").textContent = "";
   $("setEmail").textContent = user?.email || "";
   $("settingsDialog").showModal();
@@ -948,8 +1691,15 @@ async function saveSettings(e) {
   if (!name) { $("settingsMsg").textContent = "Name can't be blank."; return; }
   if (![low, mid, high].every((n) => Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Targets must be between 0 and 100."; return; }
   if (!(low <= mid && mid <= high)) { $("settingsMsg").textContent = "Targets must go low ≤ mid ≤ high."; return; }
+  const changes = { name, target_low: low, target_mid: mid, target_high: high };
+  if ("labor_low" in rest) {
+    const ll = Number($("setLaborLow").value), lm = Number($("setLaborMid").value), lh = Number($("setLaborHigh").value), lb = Number($("setBurden").value);
+    if (![ll, lm, lh, lb].every((n) => $("setLaborLow").value !== "" && Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Labor targets and the add-on must be between 0 and 100."; return; }
+    if (!(ll <= lm && lm <= lh)) { $("settingsMsg").textContent = "Labor targets must go low ≤ mid ≤ high."; return; }
+    Object.assign(changes, { labor_low: ll, labor_mid: lm, labor_high: lh, labor_burden: lb });
+  }
   try {
-    const row = await run(sb.from("restaurants").update({ name, target_low: low, target_mid: mid, target_high: high }).eq("id", rest.id).select("*").single());
+    const row = await run(sb.from("restaurants").update(changes).eq("id", rest.id).select("*").single());
     restaurants = restaurants.map((r) => (r.id === row.id ? row : r));
     rest = row;
     $("settingsDialog").close();
@@ -988,7 +1738,7 @@ async function deleteAccount() {
     return;
   }
   if ($("settingsDialog").open) $("settingsDialog").close();
-  draftDirty = false;
+  draftDirty = false; modDirty = false;
   safeSet("line.restaurant", "");
   await sb.auth.signOut({ scope: "local" });   // the login no longer exists; just clear it from this browser
   handleSession(null);
@@ -1033,8 +1783,8 @@ async function submitAuth(e) {
 }
 
 async function signOut() {
-  if (draftDirty && !confirm("You have unsaved recipe changes. Sign out anyway?")) return;
-  draftDirty = false;
+  if ((draftDirty || modDirty) && !confirm("You have unsaved changes. Sign out anyway?")) return;
+  draftDirty = false; modDirty = false;
   await sb.auth.signOut();
   handleSession(null);
 }
@@ -1044,6 +1794,10 @@ function goTo(page) {
   if (activePage === "recipes" && page !== "recipes" && draftDirty) {
     if (!confirm("You have unsaved changes to this dish. Leave without saving?")) return;
     draftDirty = false; draft = null;
+  }
+  if (activePage === "mod" && page !== "mod" && modDirty) {
+    if (!confirm("You have unsaved changes to this report. Leave without saving?")) return;
+    modDirty = false; modDraft = null; editingReportId = null;
   }
   activePage = page;
   window.scrollTo({ top: 0 });
@@ -1064,8 +1818,8 @@ function wireControls() {
   $("settingsBtn").addEventListener("click", openSettings);
   $("restaurantSelect").addEventListener("change", (e) => {
     const v = e.target.value;
-    if (draftDirty && !confirm("You have unsaved recipe changes. Switch anyway?")) { e.target.value = rest.id; return; }
-    draftDirty = false;
+    if ((draftDirty || modDirty) && !confirm("You have unsaved changes. Switch anyway?")) { e.target.value = rest.id; return; }
+    draftDirty = false; modDirty = false;
     if (v === "__new") { e.target.value = rest.id; openOnboarding(true); }
     else selectRestaurant(v).catch(() => {});
   });
@@ -1172,6 +1926,74 @@ function wireControls() {
     else if (t.id === "revertDishBtn") { draftDirty = false; startEditing(draft.id); renderRecipeEditor(); }
   });
 
-  // Warn before closing the tab with unsaved recipe edits.
-  window.addEventListener("beforeunload", (e) => { if (draftDirty) { e.preventDefault(); e.returnValue = ""; } });
+  // Labor Costs
+  $("laborWeek").addEventListener("change", (e) => { if (e.target.value) setLaborWeek(dayStr(mondayOf(parseDay(e.target.value)))); });
+  $("laborPrev").addEventListener("click", () => setLaborWeek(addDays(laborWeek, -7)));
+  $("laborNext").addEventListener("click", () => setLaborWeek(addDays(laborWeek, 7)));
+  $("laborWeeksTable").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-labor-week]");
+    if (b) setLaborWeek(b.dataset.laborWeek);
+  });
+  $("laborTable").addEventListener("input", updateLaborTotal);
+  $("saveLaborBtn").addEventListener("click", saveLabor);
+  $("copyLaborBtn").addEventListener("click", copyLastWeek);
+  $("laborRaiseApply").addEventListener("click", () => {
+    let pct = parseFloat($("laborRaisePct").value);
+    if (!Number.isFinite(pct)) pct = 0;
+    laborRaise = { dept: $("laborRaiseDept").value, pct: Math.max(-50, Math.min(100, pct)) };
+    renderLaborSummary();
+  });
+  $("laborRaiseChip").addEventListener("click", (e) => {
+    if (e.target.closest("#laborRaiseClear")) { laborRaise = { dept: "all", pct: 0 }; renderLaborSummary(); }
+  });
+  $("addStaffForm").addEventListener("submit", addStaff);
+  $("staffTable").addEventListener("change", (e) => { if (e.target.matches("[data-sid]")) updateStaff(e.target); });
+  $("staffTable").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-del-staff]");
+    if (b) deleteStaff(b.dataset.delStaff);
+  });
+
+  // MOD Report
+  $("newReportBtn").addEventListener("click", () => { if (startReport("new")) renderMod(); });
+  $("reportList").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-report]");
+    if (b && b.dataset.report !== editingReportId && startReport(b.dataset.report)) renderMod();
+  });
+  const mod = $("modEditor");
+  const onModInput = (e) => {
+    if (!modDraft) return;
+    const t = e.target;
+    const val = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.f) {
+      const f = t.dataset.f;
+      if (f === "data.hours_from" || f === "data.hours_to") {
+        setPath(modDraft, f, Number(val));
+        modDraft.data.hours_to = Math.max(modDraft.data.hours_to, modDraft.data.hours_from);
+        modDirty = true;
+        renderModEditor();
+        return;
+      }
+      setPath(modDraft, f, val);
+    } else if (t.dataset.row) {
+      modDraft.data[t.dataset.row][+t.dataset.i][t.dataset.k] = val;
+    } else if (t.dataset.hour !== undefined) {
+      modDraft.data.hourly[t.dataset.hour] = val;
+    } else return;
+    modDirty = true;
+    updateModSummary();
+  };
+  mod.addEventListener("input", onModInput);
+  mod.addEventListener("change", (e) => { if (e.target.tagName === "SELECT" || e.target.type === "checkbox") onModInput(e); });
+  mod.addEventListener("click", (e) => {
+    const t = e.target.closest("button");
+    if (!t || !modDraft) return;
+    if (t.dataset.add) { modDraft.data[t.dataset.add].push(LIST_ROWS[t.dataset.add]()); modDirty = true; renderModEditor(); }
+    else if (t.dataset.delRow) { const [list, i] = t.dataset.delRow.split(":"); modDraft.data[list].splice(+i, 1); modDirty = true; renderModEditor(); }
+    else if (t.id === "saveReportBtn") saveReport();
+    else if (t.id === "deleteReportBtn") deleteReport();
+    else if (t.id === "printReportBtn") window.print();
+  });
+
+  // Warn before closing the tab with unsaved recipe or report edits.
+  window.addEventListener("beforeunload", (e) => { if (draftDirty || modDirty) { e.preventDefault(); e.returnValue = ""; } });
 }

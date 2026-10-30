@@ -88,7 +88,7 @@ Right now your database is an empty fridge with no shelves. This step adds the s
    - If Supabase warns you that the query includes something "destructive", click **Run this query** anyway. It's only creating tables, not deleting anything.
 
 ✅ **It worked if:** you see **"Success. No rows returned"**.
-Click **Table Editor** in the left sidebar. You should see six tables: `restaurants`, `ingredients`, `dishes`, `dish_items`, `weekly_sales`, `scenarios`.
+Click **Table Editor** in the left sidebar. You should see nine tables: `restaurants`, `ingredients`, `dishes`, `dish_items`, `weekly_sales`, `scenarios`, `staff`, `labor_hours`, `mod_reports`.
 
 ❌ **"already exists" error?** You already ran it once. That's fine, so move on.
 
@@ -209,12 +209,16 @@ This makes sure any email links (for example, password resets) send people to yo
 | **Weekly Sales** | Type plates sold per dish for any week, then click **Save this week** |
 | **Ingredients** | Change a real price (it saves when you click away), add new ingredients, or delete unused ones |
 | **Recipes** | Add a dish, change its price, or add and remove ingredients, then click **Save dish** |
+| **Labor Costs** | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
+| **MOD Report** | The manager on duty fills one in every shift: weather, covers by hour (peak times are highlighted), staffing, employee and guest issues, comps and voids, 86'd items, maintenance, cash and closing checks, tomorrow's forecast, and notes. **Print / save as PDF** makes a clean copy to share. |
 
 **The what-if bar** (on Cost Tracker and Performance) works like it did in your prototype. You can now also click **Save** to keep a scenario like "Beef +15%", and reload it later from the **Saved scenarios** menu.
 
 **Multiple restaurants:** use the dropdown at the top right and choose **+ Add another restaurant**. Each person who signs up gets their **own separate restaurants**. Nobody can see anyone else's.
 
 **Settings:** change the restaurant name or your target food-cost range (28 / 32 / 35% by default).
+
+**Labor Costs and MOD Report need three more tables.** If you set up your database before these tabs existed, run `supabase/labor-and-mod.sql` once in the SQL Editor (same steps as Step 3). Until you do, the rest of the app works normally and those two tabs show a reminder. Labor targets (25 / 28 / 32% of sales by default) and the payroll taxes and benefits add-on (10%) are in **Settings**.
 
 **Delete my account:** at the bottom of **Settings** (or on the "Add a restaurant" screen). Type your email, then confirm "Are you sure?". It deletes your login and all your restaurants, so you can sign up again with the same email. (If you set up your database before this button existed, run `supabase/delete-account.sql` in the SQL Editor once first.)
 
