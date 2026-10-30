@@ -323,3 +323,115 @@ window.SEEDS.kelleys = {
     } },
   ],
 };
+
+// ---------------------------------------------------------------------
+// Kelley's: two more weeks of MOD reports (lunch + dinner, 2–15 days ago),
+// so the MOD Report tab has history to look at. Made up but realistic:
+// weekends are busier, a few shifts have issues, most are quiet.
+// Uses a fixed random seed, so every new Kelley's gets the same reports.
+// ---------------------------------------------------------------------
+(function () {
+  let seed = 20261030;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const pick = (list) => list[Math.floor(rnd() * list.length)];
+  const between = (lo, hi) => Math.round(lo + rnd() * (hi - lo));
+  const chance = (p) => rnd() < p;
+
+  const FOH = ["Jess Monroe", "Kevin Doyle", "Ana Lima", "Ryan Shea", "Olivia Park", "Ben Carter"];
+  const BOH = ["Marco Ruiz", "Tasha Green", "Eli Novak", "Sam Ortiz"];
+  const weatherByTemp = [["Sunny", 66, 74], ["Partly cloudy", 60, 70], ["Cloudy", 55, 63], ["Rain", 50, 58], ["Windy", 52, 60]];
+  const EMP = [
+    ["FOH", FOH, "Called out sick", "Texted at 2 PM with a fever.", "Covered by moving sections; doctor's note requested."],
+    ["BOH", BOH, "Called out sick", "Called in sick before the shift.", "Declan worked the line; prep pushed to tomorrow."],
+    ["FOH", FOH, "Late arrival", "Showed up 20 minutes late.", "Verbal reminder about the schedule."],
+    ["BOH", BOH, "Injury: burn", "Minor burn on the forearm from the fryer basket.", "Cooled with water, burn cream; kept working. Incident form filed."],
+    ["FOH", FOH, "Coworker dispute", "Argument with another server over table rotation.", "Talked to both after close; host will seat in strict rotation."],
+    ["BOH", BOH, "Left early / sent home", "Felt dizzy during the rush.", "Sent home at 8 PM; check in tomorrow."],
+    ["FOH", FOH, "No call / no show", "Didn't show and didn't answer the phone.", "Shift covered; write-up for the owner."],
+  ];
+  const GUEST = [
+    ["Food: undercooked", "Burger ordered medium-well came out pink.", "Recooked and comped dessert. Guest happy."],
+    ["Food: overcooked / wrong temp", "Lamb shank sent back as dry.", "Replaced with Guinness Beef Pie; comped the shank."],
+    ["Slow service / long wait", "45-minute wait for food in the rush.", "Apologized, comped a round of drinks."],
+    ["Wrong order", "Got Bangers & Mash instead of the Beef Pie.", "Fixed right away, comped a side of Curry Chips."],
+    ["Allergy concern", "Guest with a nut allergy asked about the Orchard Salad.", "Made it without walnuts on a clean board; chef confirmed."],
+    ["Food: quality or taste", "Said the chips were soggy.", "Fresh basket from fryer 1; no comp needed."],
+    ["Guest injury / accident", "Guest slipped on a wet spot near the bar; no visible injury.", "Checked on guest, offered ice, took contact info, wrote incident report. Wet-floor sign added."],
+    ["Billing / payment issue", "Card charged twice for one check.", "Voided the duplicate; showed the guest the receipt."],
+  ];
+  const COMP = [
+    ["Comp: VIP / regular", "Round of Guinness", 22, "Regulars celebrating a promotion"],
+    ["Comp: kitchen mistake", "Sticky Toffee Pudding", 10, "Long ticket time"],
+    ["Comp: service mistake", "Soft Pretzel & Beer Cheese", 11, "Forgot to fire the appetizer"],
+    ["Recook", "Fish & Chips", 8.8, "Batter came out pale"],
+    ["Void: rung in wrong", "Guinness BBQ Wings", 15, "Rung in on the wrong table"],
+    ["Refund", "Corned Beef Reuben", 16, "Guest left before it arrived"],
+    ["Employee / manager meal", "Staff meal", 18, "Double-shift meal for the closer"],
+  ];
+  const EVENTS = ["Trivia night at 7 PM", "Home game in the afternoon", "Live music Friday 8–11 PM", "Rehearsal dinner (18 guests) at 6 PM", "Quiet weeknight, nothing booked"];
+  const LUNCH = [9, 26, 22, 10, 4];          // 11 AM – 3 PM
+  const DINNER = [10, 24, 38, 44, 33, 18, 7]; // 4 PM – 10 PM
+
+  const today = new Date();
+  const reports = [];
+  for (let daysAgo = 2; daysAgo <= 15; daysAgo++) {
+    const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo).getDay();
+    const busy = day === 5 || day === 6 ? 1.3 : day === 0 ? 1.1 : day === 1 ? 0.8 : 1;
+    const [weather, lo, hi] = pick(weatherByTemp);
+    const wet = weather === "Rain";
+
+    for (const shift of ["Lunch", "Dinner"]) {
+      const dinner = shift === "Dinner";
+      const curve = dinner ? DINNER : LUNCH;
+      const from = dinner ? 16 : 11;
+      const factor = busy * (wet && dinner ? 0.85 : 1) * (0.9 + rnd() * 0.2);
+      const hourly = {};
+      curve.forEach((c, i) => { hourly[from + i] = Math.max(0, Math.round(c * factor + between(-2, 2))); });
+      const covers = Object.values(hourly).reduce((s, c) => s + c, 0);
+      const sales = Math.round(covers * (dinner ? between(18, 21) : between(15, 17)));
+      const fohSched = dinner ? (busy > 1 ? 7 : 6) : 3, bohSched = dinner ? 4 : 3;
+
+      const employee = [], guest = [], comps = [];
+      if (chance(dinner ? 0.35 : 0.15)) {
+        const [dept, people, type, notes, action] = pick(EMP);
+        employee.push({ dept, name: pick(people), type, notes, action });
+      }
+      if (chance(dinner ? 0.45 : 0.2)) {
+        const [type, notes, resolution] = pick(GUEST);
+        guest.push({ type, table: chance(0.3) ? "Bar" : `Table ${between(1, 24)}`, notes, resolution });
+      }
+      const nComps = dinner ? between(0, 3) : between(0, 1);
+      for (let i = 0; i < nComps; i++) {
+        const [type, item, amount, reason] = pick(COMP);
+        comps.push({ type, item, amount: amount.toFixed(2), reason, approved: dinner ? "Maeve" : "Declan" });
+      }
+      const noShow = employee.some((e) => /sick|no show/i.test(e.type));
+      const fohMiss = noShow && employee[0].dept === "FOH" ? 1 : 0, bohMiss = noShow && employee[0].dept === "BOH" ? 1 : 0;
+      const peakHour = from + curve.indexOf(Math.max(...curve));
+
+      reports.push({ daysAgo, shift, manager: dinner ? "Maeve Kelley" : "Declan Byrne", data: {
+        weather, temp: String(between(lo, hi) - (dinner ? 4 : 0)),
+        weather_notes: wet ? (dinner ? "Patio closed; walk-ins were slower." : "Lighter lunch traffic in the rain.") : weather === "Sunny" ? "Patio full." : "",
+        sales: String(sales), hours_from: from, hours_to: from + curve.length - 1, hourly,
+        staffing: { foh_sched: String(fohSched), foh_actual: String(fohSched - fohMiss), boh_sched: String(bohSched), boh_actual: String(bohSched - bohMiss) },
+        employee, guest, comps,
+        eighty_six: chance(0.2) ? pick(["Lamb shank 86'd at 8:30 PM.", "Out of sticky toffee sponge by 9 PM.", "Low on Irish cheddar; order placed.", "Smoked salmon 86'd; delivery tomorrow."]) : "",
+        maintenance: chance(0.2) ? pick(["Bathroom faucet dripping.", "One patio heater won't light.", "Dish machine needed a reset mid-shift.", "Light out over table 9."]) : "",
+        cash_over_short: chance(0.75) ? "0" : (between(-800, 300) / 100).toFixed(2),
+        checks: { temps: true, cleaning: true, deposit: dinner, alarm: dinner },
+        forecast: {
+          covers: String(Math.round(covers * (0.9 + rnd() * 0.25))), sales: String(Math.round(sales * (0.9 + rnd() * 0.25))),
+          reservations: dinner && chance(0.4) ? `Party of ${between(8, 16)} at ${between(6, 8)} PM.` : "Nothing large on the books.",
+          events: dinner ? pick(EVENTS) : "", staffing: noShow ? "Confirm everyone is coming in tomorrow." : "Normal crew.",
+          prep: pick(["Two batches of beer batter.", "Braise lamb shanks in the morning.", "Extra colcannon for the weekend.", "Potato leek soup x2."]),
+        },
+        summary: `${covers > (dinner ? 190 : 85) ? "Busy" : covers < (dinner ? 140 : 60) ? "Slow" : "Steady"} ${shift.toLowerCase()} that peaked around ${peakHour > 12 ? peakHour - 12 : peakHour} ${peakHour >= 12 ? "PM" : "AM"}.` +
+          (employee.length || guest.length ? " Issues noted below." : " No problems."),
+        wins: chance(0.4) ? pick(["Olivia kept the wait list moving perfectly.", "Tasha hit every ticket time in the rush.", "Ryan upsold 12 Irish coffees.", "Ana got a guest shout-out by name."]) : "",
+        followups: employee.length ? `Follow up with ${employee[0].name}.` : "",
+      } });
+    }
+  }
+  window.SEEDS.kelleys.modReports.push(...reports);
+  window.SEEDS.kelleys.label = "Kelley's: Irish-American gastropub (17 dishes, 6 weeks of sales, team, 2 weeks of MOD reports)";
+})();
