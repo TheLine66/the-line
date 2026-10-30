@@ -216,6 +216,8 @@ This makes sure any email links (for example, password resets) send people to yo
 
 **Settings:** change the restaurant name or your target food-cost range (28 / 32 / 35% by default).
 
+**Delete my account:** at the bottom of **Settings** (or on the "Add a restaurant" screen). Type your email, then confirm "Are you sure?". It deletes your login and all your restaurants, so you can sign up again with the same email. (If you set up your database before this button existed, run `supabase/delete-account.sql` in the SQL Editor once first.)
+
 ---
 
 ## Making changes later

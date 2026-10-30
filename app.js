@@ -937,6 +937,7 @@ function openSettings() {
   $("setMid").value = Number(rest.target_mid);
   $("setHigh").value = Number(rest.target_high);
   $("settingsMsg").textContent = "";
+  $("setEmail").textContent = user?.email || "";
   $("settingsDialog").showModal();
 }
 
@@ -969,6 +970,30 @@ async function deleteRestaurant() {
     safeSet("line.restaurant", "");
     await loadRestaurants();
   } catch (err) { $("settingsMsg").textContent = friendlyError(err); }
+}
+
+async function deleteAccount() {
+  const email = user?.email || "";
+  const typed = prompt(`This permanently deletes your account (${email}) and ALL of your restaurants, ingredients, recipes, sales, and scenarios. It can't be undone.\n\nAfterwards you can sign up again with the same email.\n\nType your email to confirm:`);
+  if (typed === null) return;
+  if (typed.trim().toLowerCase() !== email.toLowerCase()) { toast("Email didn't match — nothing was deleted.", "err"); return; }
+  if (!confirm("Are you sure you want to delete your account?\n\nThis is your last chance — click OK to delete it forever, or Cancel to keep it.")) {
+    toast("Nothing was deleted. Your account is safe.");
+    return;
+  }
+  const { error } = await sb.rpc("delete_my_account");
+  if (error) {
+    toast(/delete_my_account/.test(error.message || "") ?
+      "Account deleting isn't set up yet. Run supabase/delete-account.sql in Supabase first." : friendlyError(error), "err");
+    return;
+  }
+  if ($("settingsDialog").open) $("settingsDialog").close();
+  draftDirty = false;
+  safeSet("line.restaurant", "");
+  await sb.auth.signOut({ scope: "local" });   // the login no longer exists; just clear it from this browser
+  handleSession(null);
+  setAuthMode("signup");
+  toast("Your account was deleted. You can sign up again anytime.");
 }
 
 // ---------------------------------------------------------- Auth
@@ -1032,6 +1057,7 @@ function wireControls() {
   $("onboardForm").addEventListener("submit", createRestaurant);
   $("onboardCancel").addEventListener("click", () => { renderRestaurantSelect(); show("appScreen"); });
   $("onboardSignOut").addEventListener("click", signOut);
+  $("onboardDeleteAccount").addEventListener("click", deleteAccount);
 
   // Header
   $("signOutBtn").addEventListener("click", signOut);
@@ -1049,6 +1075,7 @@ function wireControls() {
   $("settingsForm").addEventListener("submit", saveSettings);
   $("settingsCancel").addEventListener("click", () => $("settingsDialog").close());
   $("deleteRestaurantBtn").addEventListener("click", deleteRestaurant);
+  $("deleteAccountBtn").addEventListener("click", deleteAccount);
 
   // What-if bar
   $("weekSelect").addEventListener("change", (e) => { selectedWeek = e.target.value || null; render(); });
