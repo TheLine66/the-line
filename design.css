@@ -112,3 +112,5 @@ select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel inp
 .auth-card { margin-left: -12vw; border-top: 28px solid var(--green); padding: 26px 30px 26px; }
 .auth-card h2 { font-size: 26px; font-style: italic; }
 @media (max-width: 700px) { .auth-card { margin-left: 0; } }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } .panel { margin-top: 0; } }
+.auth-card .brand h1 { color: var(--green); }
