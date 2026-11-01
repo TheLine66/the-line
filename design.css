@@ -38,10 +38,20 @@ a, .linkbtn { color: var(--green); text-decoration: underline; }
 
 /* ---------- Title bar ---------- */
 header { background: var(--green); border-bottom: 1px solid var(--ink); padding: 14px clamp(16px, 4vw, 40px) 0; }
-.brand h1 { font-family: var(--serif); font-style: italic; font-weight: 700; font-size: 30px; color: #FBF9F5; letter-spacing: -0.01em; }
 .brand .sub { color: #C9D7CE; font-size: 11.5px; letter-spacing: 0.04em; }
-.brand-mark { border-radius: 0; background: #FBF9F5; border: 1px solid #FBF9F5; }
-.brand-mark::after { background: var(--over); border-radius: 0; }
+.brand-mark { display: none; }
+
+/* The logo: one gold line runs straight through "The Line", behind the
+   letters, so the word stays easy to read. */
+.brand h1 {
+  position: relative; isolation: isolate; display: inline-block; padding: 0 2px;
+  font-family: var(--serif); font-style: italic; font-weight: 700; font-size: 30px; line-height: 1.15;
+  color: #FBF9F5; letter-spacing: 0.01em;
+}
+.brand h1::before {
+  content: ""; position: absolute; z-index: -1; left: -14px; right: -34px; top: 50%;
+  height: 4px; background: var(--butter);
+}
 .user-email { color: #C9D7CE; }
 header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--ink); }
 
@@ -117,9 +127,8 @@ select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel inp
 .row-card { border-radius: 0; background: var(--surface); }
 
 /* ---------- Sign-in ---------- */
-.screen.center { background: var(--bg); align-items: flex-start; padding-top: 12vh; }
-.auth-card { margin-left: -12vw; border-top: 28px solid var(--green); padding: 26px 30px 26px; }
+.screen.center { background: var(--bg); }
+.auth-card { border-top: 28px solid var(--green); padding: 26px 30px 26px; }
 .auth-card h2 { font-size: 26px; font-style: italic; }
-@media (max-width: 700px) { .auth-card { margin-left: 0; } }
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } .panel { margin-top: 0; } }
-.auth-card .brand h1 { color: var(--green); }
+.auth-card .brand h1 { color: var(--green); font-size: 36px; margin-left: 14px; }
