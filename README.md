@@ -25,6 +25,7 @@ You'll make three free accounts, connect them, and you're done.
 |---|---|---|
 | `index.html` | The page layout | No |
 | `styles.css` | Colors and fonts | No |
+| `design.css` | The current look ("Kitchen Almanac"); its colors are in the box at the top | Only if you want new colors |
 | `app.js` | All the brains: math, saving, loading | No |
 | `seed-data.js` | The sample Kennedy menu, loaded once if you ask for it | No |
 | `config.js` | **Your two Supabase "addresses"** | **Yes, once (Step 4)** |

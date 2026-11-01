@@ -1,24 +1,33 @@
 /* =====================================================================
-   The Line — Option B: "Kitchen Almanac"
+   The Line — "Kitchen Almanac" design
    An early-web reference site: Georgia and Verdana, ruled tables with
    every grid line showing, a green title bar, underlined links.
-   Brick red and old gold replace the brighter colors. No web fonts at
-   all — the way sites were built in 1999. Delete this file to undo.
+   Loaded after styles.css. Delete this file (and its <link> line in
+   index.html) to go back to the previous look.
+
+   🎨 WANT DIFFERENT COLORS? Change the hex codes in the box below.
    ===================================================================== */
 :root {
-  --green:      #1F4D3A;
-  --green-dark: #163829;
-  --butter:     #B8902C;   /* old gold                                      */
-  --butter-bg:  #F3EBD3;
-  --bg:         #FBF9F5;   /* page                                          */
-  --tint:       #EFEBE0;
-  --surface:    #FFFEFB;
-  --ink:   #262624;  --ink-2: #45443F;  --ink-3: #6E6B63;
-  --line:  #BDB7A9;  --line-strong: #6E6A61;
+  /* ---- Main colors ------------------------------------------------ */
+  --green:      #1F4D3A;   /* title bar, buttons, links                   */
+  --green-dark: #163829;   /* buttons when you hover over them            */
+  --butter:     #B8902C;   /* old gold: highlights                        */
+  --butter-bg:  #F3EBD3;   /* soft gold: selected dish, notes, totals     */
+  --bg:         #FBF9F5;   /* page background (warm paper)                */
+  --tint:       #EFEBE0;   /* what-if bar, table headings                 */
+  --surface:    #FFFEFB;   /* panels and boxes                            */
+
+  /* ---- Text and lines ---------------------------------------------- */
+  --ink:   #262624;  --ink-2: #45443F;  --ink-3: #6E6B63;   /* main → faint text */
+  --line:  #BDB7A9;  --line-strong: #6E6A61;                /* grid lines        */
+
+  /* ---- Status colors (fine / careful / problem) — best left alone -- */
   --good:  #2F6B3E;  --good-bg:  #E4EDE1;
   --watch: #86621A;  --watch-bg: #F4EAD0;  --watch-dot: #B8902C;
   --over:  #A3341F;  --over-bg:  #F4DFD8;
   --puzzle: #4E4A7A; --puzzle-bg: #E8E6F0;
+  /* ================================================================ */
+
   --radius-lg: 0; --radius: 0; --radius-sm: 0;
   --serif: Georgia, 'Times New Roman', serif;
   font-family: Verdana, Geneva, Tahoma, sans-serif;
