@@ -16,50 +16,64 @@
 
 <!-- ============ Config missing ============ -->
 <div id="setupNeeded" class="screen center hidden">
-  <div class="auth-card">
-    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
-    <h2>Almost there!</h2>
-    <p id="setupMsg">This app isn't connected to a database yet. Open <code>config.js</code> and paste in your Supabase Project URL and Publishable key, then reload this page.</p>
+  <div class="stage">
+    <div class="stage-brand">
+      <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
+      <p class="tagline">Recipe cost &amp; sales performance tracker</p>
+    </div>
+    <div class="auth-card">
+      <h2>Almost there!</h2>
+      <p id="setupMsg">This app isn't connected to a database yet. Open <code>config.js</code> and paste in your Supabase Project URL and Publishable key, then reload this page.</p>
+    </div>
   </div>
 </div>
 
 <!-- ============ Sign in / sign up ============ -->
 <div id="authScreen" class="screen center hidden">
-  <div class="auth-card">
-    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
-    <p class="muted small">Recipe cost & sales performance tracker</p>
-    <h2 id="authTitle">Sign in</h2>
-    <form id="authForm">
-      <label>Email<input type="email" id="authEmail" required autocomplete="email"></label>
-      <label>Password<input type="password" id="authPassword" required minlength="6" autocomplete="current-password"></label>
-      <button class="applybtn wide" type="submit" id="authSubmit">Sign in</button>
-    </form>
-    <p class="form-msg" id="authMsg"></p>
-    <button class="linkbtn" id="authToggle" type="button">New here? Create an account</button>
+  <div class="stage">
+    <div class="stage-brand">
+      <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
+      <p class="tagline">Recipe cost &amp; sales performance tracker</p>
+    </div>
+    <div class="auth-card">
+      <h2 id="authTitle">Sign in</h2>
+      <form id="authForm">
+        <label>Email<input type="email" id="authEmail" required autocomplete="email"></label>
+        <label>Password<input type="password" id="authPassword" required minlength="6" autocomplete="current-password"></label>
+        <button class="applybtn wide" type="submit" id="authSubmit">Sign in</button>
+      </form>
+      <p class="form-msg" id="authMsg"></p>
+      <button class="linkbtn" id="authToggle" type="button">New here? Create an account</button>
+    </div>
   </div>
 </div>
 
 <!-- ============ Create a restaurant ============ -->
 <div id="onboardScreen" class="screen center hidden">
-  <div class="auth-card">
-    <div class="brand"><span class="brand-mark"></span><h1>The Line</h1></div>
-    <h2>Add a restaurant</h2>
-    <form id="onboardForm">
-      <label>Restaurant name<input id="onboardName" required maxlength="100" placeholder="e.g. The Kennedy"></label>
-      <label>Start with
-        <select id="onboardSeed" class="light-select">
-          <option value="">Blank: I'll add my own menu</option>
-        </select>
-      </label>
-      <p class="muted small" id="onboardSeedNote">Sample menus are made-up data you can edit or delete anytime.</p>
-      <button class="applybtn wide" type="submit" id="onboardSubmit">Create restaurant</button>
-    </form>
-    <p class="form-msg" id="onboardMsg"></p>
-    <div class="row-links">
-      <button class="linkbtn hidden" id="onboardCancel" type="button">Cancel</button>
-      <button class="linkbtn" id="onboardSignOut" type="button">Sign out</button>
+  <div class="stage">
+    <div class="stage-brand">
+      <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
+      <p class="tagline">Recipe cost &amp; sales performance tracker</p>
     </div>
-    <button class="linkbtn danger" id="onboardDeleteAccount" type="button">Delete my account</button>
+    <div class="auth-card">
+      <h2>Add a restaurant</h2>
+      <form id="onboardForm">
+        <label>Restaurant name<input id="onboardName" required maxlength="100" placeholder="e.g. The Kennedy"></label>
+        <label>Start with
+          <select id="onboardSeed" class="light-select">
+            <option value="">Blank: I'll add my own menu</option>
+          </select>
+        </label>
+        <p class="muted small" id="onboardSeedNote">Sample menus are made-up data you can edit or delete anytime.</p>
+        <button class="applybtn wide" type="submit" id="onboardSubmit">Create restaurant</button>
+      </form>
+      <p class="form-msg" id="onboardMsg"></p>
+      <div class="row-links">
+        <button class="linkbtn hidden" id="onboardCancel" type="button">Cancel</button>
+        <button class="linkbtn" id="onboardSignOut" type="button">Sign out</button>
+      </div>
+      <button class="linkbtn danger" id="onboardDeleteAccount" type="button">Delete my account</button>
+    </div>
   </div>
 </div>
 
@@ -70,7 +84,7 @@
       <div class="brand">
         <span class="brand-mark"></span>
         <div>
-          <h1>The Line</h1>
+          <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
           <div class="sub">Recipe cost & sales performance tracker</div>
         </div>
       </div>

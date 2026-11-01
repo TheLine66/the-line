@@ -41,17 +41,7 @@ header { background: var(--green); border-bottom: 1px solid var(--ink); padding:
 .brand .sub { color: #C9D7CE; font-size: 11.5px; letter-spacing: 0.04em; }
 .brand-mark { display: none; }
 
-/* The logo: one gold line runs straight through "The Line", behind the
-   letters, so the word stays easy to read. */
-.brand h1 {
-  position: relative; isolation: isolate; display: inline-block; padding: 0 2px;
-  font-family: var(--serif); font-style: italic; font-weight: 700; font-size: 30px; line-height: 1.15;
-  color: #FBF9F5; letter-spacing: 0.01em;
-}
-.brand h1::before {
-  content: ""; position: absolute; z-index: -1; left: -14px; right: -34px; top: 50%;
-  height: 4px; background: var(--butter);
-}
+.brand .wordmark { font-size: 32px; color: #FBF9F5; }
 .user-email { color: #C9D7CE; }
 header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--ink); }
 
@@ -126,9 +116,20 @@ select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel inp
 .preview .val { font-family: var(--serif); }
 .row-card { border-radius: 0; background: var(--surface); }
 
-/* ---------- Sign-in ---------- */
-.screen.center { background: var(--bg); }
-.auth-card { border-top: 28px solid var(--green); padding: 26px 30px 26px; }
-.auth-card h2 { font-size: 26px; font-style: italic; }
+/* ---------- Sign-in: the kitchen behind a dark green wash ---------- */
+.screen.center { position: relative; isolation: isolate; overflow: hidden; background: #163829; padding-top: 40px; padding-bottom: 40px; }
+.screen.center::before {   /* the photo, softened a little */
+  content: ""; position: absolute; inset: -16px; z-index: -2;
+  background: url("images/kitchen.jpg") center 35% / cover no-repeat; filter: blur(3px) saturate(0.75);
+}
+.screen.center::after {    /* the green slip over it */
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(160deg, rgba(20, 52, 38, 0.93) 0%, rgba(31, 77, 58, 0.78) 48%, rgba(12, 32, 23, 0.95) 100%);
+}
+.stage .wordmark { color: #FBF9F5; --drag: 100vw; }   /* the e's line runs off the right edge */
+.tagline { color: #C9D7CE; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
+.auth-card { border-top: 8px solid var(--butter); padding: 26px 30px 26px; }
+.auth-card h2 { font-size: 26px; font-style: italic; margin-top: 4px; }
+
+/* ---------- Phones ---------- */
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } .panel { margin-top: 0; } }
-.auth-card .brand h1 { color: var(--green); font-size: 36px; margin-left: 14px; }
