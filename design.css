@@ -126,7 +126,7 @@ select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel inp
   content: ""; position: absolute; inset: 0; z-index: -1;
   background: linear-gradient(160deg, rgba(20, 52, 38, 0.93) 0%, rgba(31, 77, 58, 0.78) 48%, rgba(12, 32, 23, 0.95) 100%);
 }
-.stage .wordmark { color: #FBF9F5; --drag: 100vw; }   /* the e's line runs off the right edge */
+.stage .wordmark { color: #FBF9F5; }
 .tagline { color: #C9D7CE; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
 .auth-card { border-top: 8px solid var(--butter); padding: 26px 30px 26px; }
 .auth-card h2 { font-size: 26px; font-style: italic; margin-top: 4px; }
