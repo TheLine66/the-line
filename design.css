@@ -28,13 +28,15 @@
   --puzzle: #4E4A7A; --puzzle-bg: #E8E6F0;
   /* ================================================================ */
 
+  --hover: #F6F2E7;  --track: #ECE8DE;  --link: #1F4D3A;
+
   --radius-lg: 0; --radius: 0; --radius-sm: 0;
   --serif: Georgia, 'Times New Roman', serif;
   font-family: Verdana, Geneva, Tahoma, sans-serif;
 }
 body { font-size: 13.5px; line-height: 1.5; }
 h1, h2, h3, .section-label, .chart-head h3 { font-family: var(--serif); }
-a, .linkbtn { color: var(--green); text-decoration: underline; }
+a, .linkbtn { color: var(--link); text-decoration: underline; }
 
 /* ---------- Title bar ---------- */
 header { background: var(--green); border-bottom: 1px solid var(--ink); padding: 14px clamp(16px, 4vw, 40px) 0; }
@@ -42,17 +44,80 @@ header { background: var(--green); border-bottom: 1px solid var(--ink); padding:
 .brand-mark { display: none; }
 
 .brand .wordmark { font-size: 32px; color: #FBF9F5; }
-.user-email { color: #C9D7CE; }
-header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--ink); }
 
-/* Tabs: one even row; the open tab is the page color. */
-.tabs { gap: 2px; margin-top: 14px; }
-.tab {
-  background: rgba(255, 255, 255, 0.10); color: #E4ECE7; border: none; border-radius: 4px 4px 0 0;
-  font-family: Verdana, sans-serif; font-size: 12.5px; font-weight: 700; padding: 9px 14px;
+/* Header: the logo and where you are, then the tab row. */
+header { position: relative; z-index: 30; padding-bottom: 0; }
+.header-top { flex-wrap: nowrap; gap: 18px; }
+.where { margin-left: auto; text-align: right; min-width: 0; }
+.where-rest { color: #C9D7CE; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.where-page { color: #FBF9F5; font-family: var(--serif); font-size: 20px; font-weight: 700; white-space: nowrap; }
+@media (max-width: 560px) { .brand .sub, .where-rest { display: none; } .where-page { font-size: 16px; } .brand .wordmark { font-size: 26px; } }
+
+/* Tab row: the Menu button first, then the tabs you've chosen to keep open. */
+.tabbar { position: relative; display: flex; align-items: flex-end; gap: 2px; margin-top: 14px; }
+.tabs { display: flex; gap: 2px; margin: 0; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+.tabs .tab {
+  background: rgba(255, 255, 255, 0.10); color: #E4ECE7; border: none; border-radius: 4px 4px 0 0; white-space: nowrap;
+  font: 700 13px Verdana, Geneva, sans-serif; padding: 10px 14px; cursor: pointer;
 }
-.tab:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
-.tab.active { background: var(--bg); color: var(--green); }
+.tabs .tab:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.tabs .tab.active { background: var(--bg); color: var(--green); }
+html[data-theme="dark"] .tabs .tab.active { color: var(--ink); }
+.tabs .tab.temp { font-style: italic; }   /* open now, but not kept as a tab */
+.menu-btn {
+  display: inline-flex; align-items: center; gap: 9px; flex-shrink: 0; cursor: pointer;
+  background: #FBF9F5; color: var(--green); border: none; border-radius: 4px 4px 0 0;
+  font: 700 13px Verdana, Geneva, sans-serif; padding: 10px 14px 10px 12px;
+}
+.menu-btn:hover, .menu-btn[aria-expanded="true"] { background: #fff; }
+.menu-caret { font-size: 11px; margin-left: -2px; }
+.menu-lines, .menu-lines::before, .menu-lines::after { display: block; width: 16px; height: 2px; background: currentColor; }
+.menu-lines { position: relative; }
+.menu-lines::before, .menu-lines::after { content: ""; position: absolute; left: 0; }
+.menu-lines::before { top: -5px; } .menu-lines::after { top: 5px; }
+
+/* The Menu drops down from its button. Clicking outside closes it. */
+.menu-scrim { position: fixed; inset: 0; z-index: 40; background: transparent; visibility: hidden; }
+.menu-scrim.open { visibility: visible; }
+.side-menu {
+  position: absolute; z-index: 41; top: calc(100% + 6px); left: 0; width: 330px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 150px); overflow-y: auto;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(20, 26, 22, 0.16);
+  padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 8px;
+  opacity: 0; transform: translateY(-4px); visibility: hidden; transition: opacity .15s, transform .15s, visibility .15s;
+}
+.side-menu.open { opacity: 1; transform: none; visibility: visible; }
+.side-menu > * { flex-shrink: 0; }   /* scroll the menu instead of squashing its rows */
+.side-top { display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.side-title { font-family: var(--serif); font-size: 20px; font-weight: 700; }
+.side-close { font-size: 16px; color: var(--ink-2); }
+.side-label { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 8px; }
+.side-pages-head { display: flex; justify-content: space-between; }
+.pin-head { font-size: 12px; color: var(--ink-2); padding-right: 2px; }
+.side-menu select { width: 100%; min-width: 0; font-weight: 600; }
+.side-nav { display: flex; flex-direction: column; margin: 0 -6px; }
+.side-row { display: flex; align-items: center; gap: 6px; border-radius: 4px; }
+.side-row:hover { background: var(--hover); }
+.side-row .tab {
+  flex: 1; text-align: left; background: none; border: none; cursor: pointer; border-radius: 4px;
+  color: var(--ink); font: 500 14.5px Verdana, Geneva, sans-serif; padding: 9px 8px;
+}
+.side-row .tab.active { font-weight: 700; box-shadow: inset 3px 0 0 var(--green); background: var(--butter-bg); }
+.pin { display: flex; align-items: center; padding: 6px 8px; cursor: pointer; }
+.pin input { width: 18px; height: 18px; accent-color: var(--green); cursor: pointer; }
+.side-hint { margin: 2px 0 0; font-size: 12px; color: var(--ink-2); line-height: 1.45; }
+.theme-pick { display: flex; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; }
+.theme-pick button {
+  flex: 1; background: var(--surface); color: var(--ink); border: none; border-left: 1px solid var(--line-strong);
+  font: 500 13px Verdana, Geneva, sans-serif; padding: 8px 4px; cursor: pointer;
+}
+.theme-pick button:first-child { border-left: none; }
+.theme-pick button[aria-pressed="true"] { background: var(--green); color: #fff; font-weight: 700; }
+.side-account { margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.side-account .ghostbtn { width: 100%; text-align: left; }
+.user-email { text-align: left; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .side-menu { transition: none; } }
 
 /* ---------- Numbers: level digits, lined up in columns ----------
    Georgia's digits bob up and down (old-style figures), so every number
@@ -67,7 +132,12 @@ header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--i
 @media (max-width: 700px) { #appScreen .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .metric { padding: 16px 18px; }
 .metric .num { font-weight: 700; font-size: clamp(22px, 2.4vw, 28px); letter-spacing: -0.01em; }
-.metric .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+/* Every number reads label first, then value. Labels are dark, not gray. */
+.metric, .cost-summary > div, .preview > div { display: flex; flex-direction: column-reverse; justify-content: space-between; }
+/* (column-reverse + space-between: labels sit at the top, numbers share one line at the bottom) */
+.metric .label, .cost-summary .lbl, .preview .lbl {
+  color: var(--ink); font-size: 13px; font-weight: 700; text-transform: none; letter-spacing: 0; margin: 0 0 6px;
+}
 
 .simbar { background: var(--tint); border-bottom: 1px solid var(--line); }
 .simfield label { font-size: 11px; }
@@ -77,7 +147,7 @@ header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--i
 .dish-row:first-of-type { border-top: none; }
 .dish-row .name { font-family: var(--serif); font-size: 15.5px; }
 .dish-row .cat { font-size: 11px; }
-.dish-row:hover { background: #F6F2E7; }
+.dish-row:hover { background: var(--hover); }
 .dish-row.selected { background: var(--butter-bg); box-shadow: inset 3px 0 0 var(--green); }
 
 main { grid-template-columns: minmax(280px, 340px) 1fr; gap: 22px; }
@@ -89,18 +159,43 @@ main { grid-template-columns: minmax(280px, 340px) 1fr; gap: 22px; }
 .section-label { font-size: 16px; font-style: italic; }
 
 /* Tables: row lines only, header underlined. */
-table.ingredients th, table.perf th, table.edit th { color: var(--ink-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line-strong); }
+table.ingredients th, table.perf th, table.edit th { color: var(--ink); font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--line-strong); }
 table.ingredients td, table.perf td, table.edit td { border-bottom: 1px solid var(--line); }
 table.ingredients tfoot td { border-top: 2px solid var(--ink); }
 
-.gauge-track { border-radius: 999px; background: #ECE8DE; }
+.gauge-track { border-radius: 999px; background: var(--track); }
 .gauge-zone { border-radius: 999px; border-width: 1.5px; }
 
-/* Notes: straight, with a colored edge. */
-.action-box, .callout { border: none; border-left: 4px solid var(--watch-dot); border-radius: 0 6px 6px 0; }
-.callout { background: var(--butter-bg); }
-.action-box.ok { border-left-color: var(--good); }
-.action-box .tag, .callout .tag { font-family: var(--serif); font-style: italic; font-size: 15px; font-weight: 700; }
+/* ---------- What to do about it ----------
+   Set like a note on a printed menu card: a heavy rule on top, a plain
+   heading, and the two choices side by side. Red dishes get the red rule. */
+.fix { margin: 4px 0 30px; padding: 14px 0 16px; border-top: 3px solid var(--watch-dot); border-bottom: 1px solid var(--line); }
+.fix-red { border-top-color: var(--over); }
+.fix-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: 8px; }
+.fix-flag { font-family: var(--serif); font-size: 22px; font-weight: 700; color: var(--watch); }
+.fix-red .fix-flag { color: var(--over); }
+.fix-why { font-size: 14px; font-weight: 700; color: var(--ink); }
+.fix-lede { margin: 0 0 14px; font-size: 15px; line-height: 1.55; color: var(--ink); max-width: 64ch; }
+.fix-moves { display: flex; align-items: stretch; gap: 0 22px; flex-wrap: wrap; }
+.move { padding: 2px 0; min-width: 160px; }
+.move-label { font-size: 13px; font-weight: 700; color: var(--ink); }
+.move-val { font-family: Verdana, Geneva, sans-serif; font-variant-numeric: lining-nums tabular-nums; font-size: 28px; font-weight: 700; color: var(--ink); line-height: 1.2; margin: 2px 0; }
+.fix-red .move-val { color: var(--over); }
+.move-val.small { font-size: 22px; }
+.move-note { font-size: 13px; color: var(--ink-2); }
+.move-or { align-self: center; font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--ink-2); padding: 0 4px; }
+.fix-ok { border-top-color: var(--good); font-size: 15px; color: var(--ink); padding: 12px 0; }
+.fix-ok strong { color: var(--good); }
+
+/* Labor and Performance notes use the same ruled style. */
+.action-box, .callout {
+  background: none; border: none; border-top: 3px solid var(--watch-dot); border-bottom: 1px solid var(--line);
+  border-radius: 0; padding: 14px 0 16px; margin-bottom: 26px;
+}
+.action-box.ok { border-top-color: var(--good); }
+.action-box .tag, .callout .tag { font-family: var(--serif); font-style: normal; font-size: 20px; font-weight: 700; color: var(--watch); margin-bottom: 6px; }
+.action-box.ok .tag { color: var(--good); }
+.action-box p, .callout p { color: var(--ink); }
 
 /* ---------- Buttons and fields in the app: flat, slightly rounded ---------- */
 #appScreen .applybtn, dialog .applybtn { border-radius: 4px; background: var(--green); font-family: Verdana, sans-serif; font-size: 12.5px; border: none; box-shadow: none; }
@@ -108,7 +203,6 @@ table.ingredients tfoot td { border-top: 2px solid var(--ink); }
 #appScreen .ghostbtn, dialog .ghostbtn { border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 12.5px; box-shadow: none; }
 #appScreen .ghostbtn:hover, dialog .ghostbtn:hover { border-color: var(--green); color: var(--green); }
 #appScreen select, #appScreen input, #appScreen textarea, #appScreen .sign-toggle, dialog input { border-radius: 4px !important; border-color: #CFC9BC; font-family: Verdana, sans-serif; }
-header select, header .ghostbtn { border: none !important; }
 .toast { border-radius: 6px; font-family: Verdana, sans-serif; }
 .preview { border-radius: 6px; background: var(--tint); }
 .row-card { border-radius: 6px; background: var(--surface); }
@@ -135,6 +229,37 @@ select, input, textarea { border-radius: 0; border-color: var(--line-strong); fo
 .tagline { color: #C9D7CE; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
 .auth-card { border-top: 8px solid var(--butter); padding: 26px 30px 26px; }
 .auth-card h2 { font-size: 26px; font-style: italic; margin-top: 4px; }
+
+footer { color: var(--ink-2); }
+
+/* ---------- Dark mode ----------
+   Same layout, darker paper. The sign-in screens keep their light card. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --green-dark: #2A6A50;
+  --butter: #C9A443;    --butter-bg: #3A3322;
+  --bg: #151916;        --tint: #1E2420;      --surface: #1C211E;
+  --ink: #ECE8DF;       --ink-2: #C6C1B5;     --ink-3: #9D988D;
+  --line: #333B36;      --line-strong: #4D5650;
+  --good: #7CC495;      --good-bg: #1F3327;
+  --watch: #E2B653;     --watch-bg: #3A3120;  --watch-dot: #D2A43C;
+  --over: #F2836B;      --over-bg: #3E2520;
+  --puzzle: #ADA7EC;    --puzzle-bg: #2A2840;
+  --hover: #252C28;     --track: #2C332F;     --link: #8FCBA8;
+}
+html[data-theme="dark"] .screen.center {
+  color-scheme: light;
+  --butter: #B8902C; --butter-bg: #F3EBD3; --bg: #FBF9F5; --tint: #EFEBE0; --surface: #FFFEFB;
+  --ink: #262624; --ink-2: #45443F; --ink-3: #6E6B63; --line: #BDB7A9; --line-strong: #6E6A61;
+  --good: #2F6B3E; --good-bg: #E4EDE1; --watch: #86621A; --watch-bg: #F4EAD0; --watch-dot: #B8902C;
+  --over: #A3341F; --over-bg: #F4DFD8; --hover: #F6F2E7; --track: #ECE8DE; --link: #1F4D3A;
+}
+html[data-theme="dark"] header { border-bottom-color: #0C1A13; }
+html[data-theme="dark"] .toast { background: #ECE8DF; color: #151916; }
+html[data-theme="dark"] code { background: var(--tint); }
+html[data-theme="dark"] table.perf tbody tr:hover, html[data-theme="dark"] table.perf tbody tr:nth-child(even) { background: var(--hover); }
+html[data-theme="dark"] .gauge-mark { border-color: var(--surface); }
+html[data-theme="dark"] .sign-toggle button { background: var(--surface); color: var(--ink-2); }
 
 /* ---------- Phones ---------- */
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }

@@ -8,6 +8,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="design.css">
+<script>
+  /* Light or dark: the saved choice, else the device setting. app.js keeps it in sync. */
+  try {
+    var t = localStorage.getItem("line.theme");
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = "light"; }
+</script>
 </head>
 <body>
 
@@ -88,23 +96,43 @@
           <div class="sub">Recipe cost & sales performance tracker</div>
         </div>
       </div>
-      <div class="header-controls">
-        <select id="restaurantSelect" aria-label="Restaurant"></select>
-        <button class="ghostbtn" id="settingsBtn" type="button">Settings</button>
-        <button class="ghostbtn" id="signOutBtn" type="button">Sign out</button>
-        <div class="user-email" id="userEmail"></div>
+      <div class="where">
+        <div class="where-rest" id="whereRest"></div>
+        <div class="where-page" id="wherePage">Cost Tracker</div>
       </div>
     </div>
-    <nav class="tabs">
-      <button class="tab active" data-page="cost">Cost Tracker</button>
-      <button class="tab" data-page="perf">Performance</button>
-      <button class="tab" data-page="sales">Weekly Sales</button>
-      <button class="tab" data-page="ingredients">Ingredients</button>
-      <button class="tab" data-page="recipes">Recipes</button>
-      <button class="tab" data-page="labor">Labor Costs</button>
-      <button class="tab" data-page="mod">MOD Report</button>
-    </nav>
+    <div class="tabbar">
+      <button class="menu-btn" id="menuBtn" type="button" aria-controls="sideMenu" aria-expanded="false">
+        <span class="menu-lines" aria-hidden="true"></span>Menu<span class="menu-caret" aria-hidden="true">▾</span>
+      </button>
+      <nav class="tabs" id="pinnedTabs" aria-label="Open tabs"></nav>
+      <!-- Menu: pages (and which are tabs), restaurant, appearance, account -->
+        <div class="menu-scrim" id="menuScrim"></div>
+        <aside class="side-menu" id="sideMenu" aria-label="Menu">
+          <div class="side-top">
+            <span class="side-title">Menu</span>
+            <button class="iconbtn side-close" id="menuClose" type="button" aria-label="Close menu">✕</button>
+          </div>
+          <label class="side-label" for="restaurantSelect">Restaurant</label>
+          <select id="restaurantSelect"></select>
+          <div class="side-label side-pages-head"><span>Pages</span><span class="pin-head">Tab</span></div>
+          <nav class="side-nav" aria-label="Pages" id="sideNav"></nav>
+          <p class="side-hint">Tick "Tab" to keep a page open in the row above for quick switching.</p>
+          <div class="side-label">Appearance</div>
+          <div class="theme-pick" role="group" aria-label="Appearance">
+            <button type="button" data-theme-choice="auto">Match device</button>
+            <button type="button" data-theme-choice="light">Light</button>
+            <button type="button" data-theme-choice="dark">Dark</button>
+          </div>
+          <div class="side-account">
+            <button class="ghostbtn" id="settingsBtn" type="button">Restaurant settings</button>
+            <button class="ghostbtn" id="signOutBtn" type="button">Sign out</button>
+            <div class="user-email" id="userEmail"></div>
+          </div>
+        </aside>
+    </div>
   </header>
+
 
   <!-- What-if bar (Cost Tracker + Performance) -->
   <div class="simbar" id="simbar">
@@ -329,7 +357,7 @@
     </main>
   </div>
 
-  <footer>The Line · FinTech @ Rocky Top class demo · numbers are what you enter</footer>
+  <footer>The Line · FinTech @ Rocky Top Lightning Demo · Group 66</footer>
 </div>
 
 <!-- ============ Settings dialog ============ -->

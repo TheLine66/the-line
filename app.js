@@ -103,6 +103,7 @@ const targets = () => ({ low: Number(rest.target_low), mid: Number(rest.target_m
 
 // ================================================================ STARTUP
 document.addEventListener("DOMContentLoaded", () => {
+  applyTheme();
   const configured = cfg.SUPABASE_URL && cfg.SUPABASE_KEY &&
     !cfg.SUPABASE_URL.includes("PASTE_") && !cfg.SUPABASE_KEY.includes("PASTE_");
   if (!window.supabase) {
@@ -333,8 +334,42 @@ function computeAll() {
 }
 
 // ================================================================ RENDER
+const PAGE_NAMES = { cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
+  recipes: "Recipes", labor: "Labor Costs", mod: "MOD Report" };
+
+// Which pages show as tabs in the row under the logo. Saved in this
+// browser; every page is always reachable from the Menu.
+const TABS_KEY = "line.tabs";
+const DEFAULT_TABS = ["cost", "perf", "labor", "mod"];
+function pinnedTabs() {
+  try {
+    const v = JSON.parse(safeGet(TABS_KEY) || "null");
+    if (Array.isArray(v)) return v.filter((p) => p in PAGE_NAMES);
+  } catch { /* fall through */ }
+  return DEFAULT_TABS.slice();
+}
+function setPinned(page, on) {
+  const set = new Set(pinnedTabs());
+  on ? set.add(page) : set.delete(page);
+  safeSet(TABS_KEY, JSON.stringify(Object.keys(PAGE_NAMES).filter((p) => set.has(p))));
+  renderTabs();
+}
+function renderTabs() {
+  const pinned = new Set(pinnedTabs());
+  const shown = Object.keys(PAGE_NAMES).filter((p) => pinned.has(p) || p === activePage);
+  $("pinnedTabs").innerHTML = shown.map((p) =>
+    `<button class="tab ${p === activePage ? "active" : ""} ${pinned.has(p) ? "" : "temp"}" data-page="${p}" type="button"${p === activePage ? ' aria-current="page"' : ""}>${PAGE_NAMES[p]}</button>`).join("");
+  $("sideNav").innerHTML = Object.keys(PAGE_NAMES).map((p) => `<div class="side-row">
+      <button class="tab ${p === activePage ? "active" : ""}" data-page="${p}" type="button">${PAGE_NAMES[p]}</button>
+      <label class="pin"><input type="checkbox" data-pin="${p}" ${pinned.has(p) ? "checked" : ""} aria-label="Show ${PAGE_NAMES[p]} as a tab"></label>
+    </div>`).join("");
+}
+
 function render() {
   if (!rest) return;
+  $("whereRest").textContent = rest.name;
+  $("wherePage").textContent = PAGE_NAMES[activePage];
+  renderTabs();
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.page === activePage));
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + activePage));
   $("simbar").classList.toggle("hidden", !(activePage === "cost" || activePage === "perf"));
@@ -421,18 +456,36 @@ function renderDishList() {
   }).join("");
 }
 
+// What to do about a dish, shown right under its target bar. Red dishes
+// get the loudest treatment: what's driving the cost and two ways out.
 function suggestedAction(dish, cost, pct) {
   const t = targets();
   if (pct <= t.low) {
-    return { ok: true, text: `Healthy margin. This dish is <strong>${fmtPct(t.low - pct)}</strong> below your ${t.low}% target. No action needed.` };
+    return `<div class="fix fix-ok"><strong>On target.</strong> ${fmtPct(pct)} food cost, ${(t.low - pct).toFixed(1)} points under your ${t.low}% line. Nothing to change.</div>`;
   }
   const idealPrice = cost / (t.mid / 100);
   const delta = idealPrice - dish.price;
   const portionCut = (1 - (dish.price * (t.mid / 100)) / cost) * 100;
+  const big = dish.items.map((it) => ({ ing: ingredients.get(it.ingredient_id), line: ingCost(it.ingredient_id) * it.qty }))
+    .sort((a, b) => b.line - a.line)[0];
+  const driver = big && cost > 0
+    ? `${esc(big.ing?.name)} is the biggest cost: ${fmt(big.line)} of the ${fmt(cost)} plate (${Math.round((big.line / cost) * 100)}%).`
+    : "";
+  const priceMove = `<div class="move"><div class="move-label">Raise the price to</div><div class="move-val">${fmt(idealPrice)}</div><div class="move-note">+${fmt(delta)} a plate</div></div>`;
   if (pct <= t.high) {
-    return { ok: false, text: `Trending high. Raise the price by <strong>${fmt(delta)}</strong> (to ${fmt(idealPrice)}) to bring this back to a ${t.mid}% target, or keep an eye on it, since it's still inside your range.` };
+    return `<section class="fix fix-watch" aria-label="Suggested action">
+      <div class="fix-head"><span class="fix-flag">Worth a look</span><span class="fix-why">${fmtPct(pct)} food cost: inside your range, above your ${t.mid}% goal</span></div>
+      <p class="fix-lede">${driver} To get back to ${t.mid}%:</p>
+      <div class="fix-moves">${priceMove}<div class="move-or">or</div>
+        <div class="move"><div class="move-label">Leave it and</div><div class="move-val small">watch it</div><div class="move-note">check again next week</div></div></div>
+    </section>`;
   }
-  return { ok: false, text: `Over target. Raise the price to <strong>${fmt(idealPrice)}</strong> (+${fmt(delta)}), or cut the portion by roughly <strong>${portionCut.toFixed(0)}%</strong> to bring food cost back to ${t.mid}%.` };
+  return `<section class="fix fix-red" aria-label="Suggested action">
+    <div class="fix-head"><span class="fix-flag">Fix this dish</span><span class="fix-why">${fmtPct(pct)} food cost, ${(pct - t.high).toFixed(1)} points over your ${t.high}% limit</span></div>
+    <p class="fix-lede">${driver} Pick one of these to get back to ${t.mid}%:</p>
+    <div class="fix-moves">${priceMove}<div class="move-or">or</div>
+      <div class="move"><div class="move-label">Trim the portion by</div><div class="move-val">${portionCut.toFixed(0)}%</div><div class="move-note">keep the ${fmt(dish.price)} price</div></div></div>
+  </section>`;
 }
 
 // A simple bar showing where this dish's food cost sits vs. the target zone.
@@ -490,14 +543,13 @@ function renderPanel() {
       <div><div class="val mono">${fmt(dish.price - cost)}</div><div class="lbl">Gross margin per plate</div></div>
     </div>
     ${targetBar(pct, st)}
+    ${action}
     <div class="section-label">Recipe breakdown</div>
     <table class="ingredients">
       <thead><tr><th>Ingredient</th><th class="num">Qty</th><th class="num">Cost</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr><td>Total</td><td></td><td class="num mono">${fmt(cost)}</td></tr></tfoot>
     </table>
-    <div class="section-label">Suggested action</div>
-    <div class="action-box ${action.ok ? "ok" : ""}"><div class="tag">${action.ok ? "No action needed" : "Margin at risk"}</div><p>${action.text}</p></div>
     <p><button class="linkbtn" data-edit-dish="${dish.id}" type="button">Edit this recipe</button></p>`;
 }
 
@@ -573,25 +625,25 @@ function renderQuadrantChart(rows, avgUnits, avgMargin) {
     const cx = x(r.units), cy = y(r.marginPerPlate);
     const rad = 6 + (r.weeklyRevenue / maxRevenue) * 16;
     const label = r.d.name.length > 22 ? r.d.name.slice(0, 21) + "…" : r.d.name;
-    const text = labeled.has(r.d.id) ? `<text x="${cx.toFixed(1)}" y="${(cy - rad - 5).toFixed(1)}" font-size="10.5" font-weight="600" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.8" text-anchor="middle">${esc(label)}</text>` : "";
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${color[r.status]}" fill-opacity="0.82" stroke="#1C2421" stroke-opacity="0.15"><title>${esc(r.d.name)}: ${r.units} sold, ${fmt(r.marginPerPlate)} margin/plate</title></circle>
+    const text = labeled.has(r.d.id) ? `<text x="${cx.toFixed(1)}" y="${(cy - rad - 5).toFixed(1)}" font-size="10.5" font-weight="600" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.85" text-anchor="middle">${esc(label)}</text>` : "";
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${color[r.status]}" fill-opacity="0.82" style="stroke:var(--ink)" stroke-opacity="0.2"><title>${esc(r.d.name)}: ${r.units} sold, ${fmt(r.marginPerPlate)} margin/plate</title></circle>
       ${text}`;
   }).join("");
 
   const lbl = (xx, yy, fill, anchor, text) =>
-    `<text x="${xx}" y="${yy}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="${fill}" text-anchor="${anchor}" font-weight="600">${text}</text>`;
+    `<text x="${xx}" y="${yy}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:${fill}" text-anchor="${anchor}" font-weight="600">${text}</text>`;
   $("quadrantChart").innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Popularity versus profitability chart">
-      <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.25"/>
-      <line x1="${PAD}" y1="${PAD - 10}" x2="${PAD}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.25"/>
-      <line x1="${ax}" y1="${PAD - 10}" x2="${ax}" y2="${H - PAD}" stroke="#1C2421" stroke-opacity="0.15" stroke-dasharray="4 4"/>
-      <line x1="${PAD}" y1="${ay}" x2="${W - PAD}" y2="${ay}" stroke="#1C2421" stroke-opacity="0.15" stroke-dasharray="4 4"/>
-      ${lbl(W - PAD, PAD - 16, "#2E7D4F", "end", "Stars: popular and profitable")}
-      ${lbl(W - PAD, H - PAD + 22, "#9A6410", "end", "Plowhorses: popular, thinner margin")}
-      ${lbl(PAD, PAD - 16, "#5853A3", "start", "Puzzles: profitable, sell more of these")}
-      ${lbl(PAD, H - PAD + 22, "#C0402B", "start", "Dogs: slow and thin")}
-      <text x="${W / 2}" y="${H - 8}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.5" text-anchor="middle">Units sold per week →</text>
-      <text x="14" y="${H / 2}" font-size="11" font-family="Figtree, system-ui, sans-serif" fill="#1C2421" fill-opacity="0.5" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Margin $ per plate →</text>
+      <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.3"/>
+      <line x1="${PAD}" y1="${PAD - 10}" x2="${PAD}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.3"/>
+      <line x1="${ax}" y1="${PAD - 10}" x2="${ax}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.2" stroke-dasharray="4 4"/>
+      <line x1="${PAD}" y1="${ay}" x2="${W - PAD}" y2="${ay}" style="stroke:var(--ink)" stroke-opacity="0.2" stroke-dasharray="4 4"/>
+      ${lbl(W - PAD, PAD - 16, "var(--good)", "end", "Stars: popular and profitable")}
+      ${lbl(W - PAD, H - PAD + 22, "var(--watch)", "end", "Plowhorses: popular, thinner margin")}
+      ${lbl(PAD, PAD - 16, "var(--puzzle)", "start", "Puzzles: profitable, sell more of these")}
+      ${lbl(PAD, H - PAD + 22, "var(--over)", "start", "Dogs: slow and thin")}
+      <text x="${W / 2}" y="${H - 8}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.6" text-anchor="middle">Units sold per week →</text>
+      <text x="14" y="${H / 2}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.6" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Margin $ per plate →</text>
       ${points}
     </svg>`;
 }
@@ -1000,7 +1052,7 @@ function renderLaborSummary() {
   $("laborMetrics").innerHTML = `
     <div class="metric"><div class="num mono">${fmt0(L.total)}</div><div class="label">Labor cost${whatIf ? " (what-if)" : ""}, incl. ${laborBurden()}% taxes &amp; benefits</div></div>
     <div class="metric ${st === "red" ? "warn" : st === "green" ? "good" : ""}"><div class="num mono">${pct === null ? "—" : fmtPct(pct)}</div><div class="label">Labor cost % of sales (target ${t.low}–${t.high}%)</div></div>
-    <div class="metric ${prime > 65 ? "warn" : ""}"><div class="num mono">${prime === null ? "—" : fmtPct(prime)}</div><div class="label">Prime cost % (food + labor; aim for 60–65% or less)</div></div>
+    <div class="metric ${prime > 65 ? "warn" : ""}"><div class="num mono">${prime === null ? "—" : fmtPct(prime)}</div><div class="label">Prime cost % (food + labor)</div></div>
     <div class="metric"><div class="num mono">${revenue && L.hours ? fmt(revenue / L.hours) : "—"}</div><div class="label">Sales per labor hour</div></div>`;
 
   if (!revenue) {
@@ -1388,15 +1440,6 @@ function renderModEditor() {
       ${input("Net sales ($)", "data.sales", d.sales, `type="number" min="0" step="0.01" placeholder="From the POS"`)}
     </div>
     <div class="preview" id="modSummary"></div>
-
-    <div class="mod-section">
-      <div class="section-label">Weather</div>
-      <div class="form-grid">
-        <label>Conditions<select data-f="data.weather">${opts(WEATHER, d.weather, "Choose…")}</select></label>
-        ${input("Temperature (°F)", "data.temp", d.temp, `type="number" step="1" placeholder="e.g. 72"`)}
-        ${input("How it affected business", "data.weather_notes", d.weather_notes, `maxlength="300" class="wide-input" placeholder="e.g. Patio closed at 6 PM"`)}
-      </div>
-    </div>
 
     <div class="mod-section">
       <div class="section-label">Covers (guests) by hour</div>
@@ -1789,6 +1832,35 @@ async function signOut() {
   handleSession(null);
 }
 
+// ---------------------------------------------------------- Light / dark
+// "auto" follows the device; "light" or "dark" overrides it. The choice is
+// remembered in this browser only.
+const THEME_KEY = "line.theme";
+const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+function themeChoice() { const v = safeGet(THEME_KEY); return v === "light" || v === "dark" ? v : "auto"; }
+function applyTheme() {
+  const choice = themeChoice();
+  const dark = choice === "dark" || (choice === "auto" && !!darkQuery?.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelectorAll("[data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice)));
+}
+
+// ---------------------------------------------------------- Side menu
+function menuOpen() { return $("sideMenu").classList.contains("open"); }
+function openMenu() {
+  $("sideMenu").classList.add("open");
+  $("menuScrim").classList.add("open");
+  $("menuBtn").setAttribute("aria-expanded", "true");
+  ($("sideMenu").querySelector(".tab.active") || $("menuClose")).focus();
+}
+function closeMenu() {
+  if (!menuOpen()) return;
+  $("sideMenu").classList.remove("open");
+  $("menuScrim").classList.remove("open");
+  $("menuBtn").setAttribute("aria-expanded", "false");
+  $("menuBtn").focus();
+}
+
 // ================================================================ WIRING
 function goTo(page) {
   if (activePage === "recipes" && page !== "recipes" && draftDirty) {
@@ -1813,17 +1885,33 @@ function wireControls() {
   $("onboardSignOut").addEventListener("click", signOut);
   $("onboardDeleteAccount").addEventListener("click", deleteAccount);
 
-  // Header
-  $("signOutBtn").addEventListener("click", signOut);
-  $("settingsBtn").addEventListener("click", openSettings);
+  // Side menu
+  $("menuBtn").addEventListener("click", () => (menuOpen() ? closeMenu() : openMenu()));
+  $("menuClose").addEventListener("click", closeMenu);
+  $("menuScrim").addEventListener("click", closeMenu);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menuOpen()) closeMenu(); });
+  document.querySelectorAll("[data-theme-choice]").forEach((b) => b.addEventListener("click", () => {
+    const v = b.dataset.themeChoice;
+    safeSet(THEME_KEY, v === "auto" ? "" : v);
+    applyTheme();
+  }));
+  darkQuery?.addEventListener?.("change", applyTheme);
+  $("signOutBtn").addEventListener("click", () => { closeMenu(); signOut(); });
+  $("settingsBtn").addEventListener("click", () => { closeMenu(); openSettings(); });
   $("restaurantSelect").addEventListener("change", (e) => {
     const v = e.target.value;
     if ((draftDirty || modDirty) && !confirm("You have unsaved changes. Switch anyway?")) { e.target.value = rest.id; return; }
     draftDirty = false; modDirty = false;
+    closeMenu();
     if (v === "__new") { e.target.value = rest.id; openOnboarding(true); }
     else selectRestaurant(v).catch(() => {});
   });
-  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => goTo(t.dataset.page)));
+  // Tabs (in the row and in the Menu) are drawn by renderTabs, so listen on the page.
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest(".tab[data-page]");
+    if (t) { closeMenu(); goTo(t.dataset.page); }
+  });
+  $("sideNav").addEventListener("change", (e) => { if (e.target.dataset.pin) setPinned(e.target.dataset.pin, e.target.checked); });
 
   // Settings dialog
   $("settingsForm").addEventListener("submit", saveSettings);
