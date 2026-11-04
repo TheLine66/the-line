@@ -348,6 +348,10 @@ function pinnedTabs() {
   } catch { /* fall through */ }
   return DEFAULT_TABS.slice();
 }
+function setAllPinned(on) {
+  safeSet(TABS_KEY, JSON.stringify(on ? Object.keys(PAGE_NAMES) : []));
+  renderTabs();
+}
 function setPinned(page, on) {
   const set = new Set(pinnedTabs());
   on ? set.add(page) : set.delete(page);
@@ -359,6 +363,9 @@ function renderTabs() {
   const shown = Object.keys(PAGE_NAMES).filter((p) => pinned.has(p) || p === activePage);
   $("pinnedTabs").innerHTML = shown.map((p) =>
     `<button class="tab ${p === activePage ? "active" : ""} ${pinned.has(p) ? "" : "temp"}" data-page="${p}" type="button"${p === activePage ? ' aria-current="page"' : ""}>${PAGE_NAMES[p]}</button>`).join("");
+  const all = Object.keys(PAGE_NAMES).every((p) => pinned.has(p));
+  $("pinAll").textContent = all ? "Unselect all" : "Select all";
+  $("pinAll").setAttribute("aria-label", all ? "Hide all pages from the tab row" : "Show every page as a tab");
   $("sideNav").innerHTML = Object.keys(PAGE_NAMES).map((p) => `<div class="side-row">
       <button class="tab ${p === activePage ? "active" : ""}" data-page="${p}" type="button">${PAGE_NAMES[p]}</button>
       <label class="pin"><input type="checkbox" data-pin="${p}" ${pinned.has(p) ? "checked" : ""} aria-label="Show ${PAGE_NAMES[p]} as a tab"></label>
@@ -474,17 +481,17 @@ function suggestedAction(dish, cost, pct) {
   const priceMove = `<div class="move"><div class="move-label">Raise the price to</div><div class="move-val">${fmt(idealPrice)}</div><div class="move-note">+${fmt(delta)} a plate</div></div>`;
   if (pct <= t.high) {
     return `<section class="fix fix-watch" aria-label="Suggested action">
-      <div class="fix-head"><span class="fix-flag">Worth a look</span><span class="fix-why">${fmtPct(pct)} food cost: inside your range, above your ${t.mid}% goal</span></div>
-      <p class="fix-lede">${driver} To get back to ${t.mid}%:</p>
+      <div class="fix-head"><span class="fix-flag">Suggested action</span><span class="fix-why">${fmtPct(pct)} food cost: inside your range, above your ${t.mid}% goal</span></div>
       <div class="fix-moves">${priceMove}<div class="move-or">or</div>
         <div class="move"><div class="move-label">Leave it and</div><div class="move-val small">watch it</div><div class="move-note">check again next week</div></div></div>
+      <p class="fix-lede">${driver} Raising the price brings it back to your ${t.mid}% goal.</p>
     </section>`;
   }
   return `<section class="fix fix-red" aria-label="Suggested action">
-    <div class="fix-head"><span class="fix-flag">Fix this dish</span><span class="fix-why">${fmtPct(pct)} food cost, ${(pct - t.high).toFixed(1)} points over your ${t.high}% limit</span></div>
-    <p class="fix-lede">${driver} Pick one of these to get back to ${t.mid}%:</p>
+    <div class="fix-head"><span class="fix-flag">Suggested action</span><span class="fix-why">${fmtPct(pct)} food cost, ${(pct - t.high).toFixed(1)} points over your ${t.high}% limit</span></div>
     <div class="fix-moves">${priceMove}<div class="move-or">or</div>
       <div class="move"><div class="move-label">Trim the portion by</div><div class="move-val">${portionCut.toFixed(0)}%</div><div class="move-note">keep the ${fmt(dish.price)} price</div></div></div>
+    <p class="fix-lede">${driver} Either change brings food cost back to your ${t.mid}% goal.</p>
   </section>`;
 }
 
@@ -1912,6 +1919,7 @@ function wireControls() {
     if (t) { closeMenu(); goTo(t.dataset.page); }
   });
   $("sideNav").addEventListener("change", (e) => { if (e.target.dataset.pin) setPinned(e.target.dataset.pin, e.target.checked); });
+  $("pinAll").addEventListener("click", () => { const on = new Set(pinnedTabs()); setAllPinned(!Object.keys(PAGE_NAMES).every((p) => on.has(p))); });
 
   // Settings dialog
   $("settingsForm").addEventListener("submit", saveSettings);
