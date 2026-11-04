@@ -1,5 +1,5 @@
 // =====================================================================
-// The Line — app logic
+// The Line: app logic
 // Talks to Supabase (database + logins). Each account owns one or more
 // restaurants; the database's security rules (see supabase/schema.sql)
 // make sure nobody can see another account's restaurants.
@@ -36,7 +36,7 @@ function friendlyError(err) {
   if (code === "23505") return "That name is already used. Pick a different one.";
   if (code === "23503") return "That item is still used somewhere (for example, in a recipe). Remove it there first.";
   if (code === "23514") return "One of the numbers isn't allowed (check for negatives or blanks).";
-  if (code === "42501" || /row-level security/i.test(err.message || "")) return "Permission denied — try signing out and back in.";
+  if (code === "42501" || /row-level security/i.test(err.message || "")) return "Permission denied. Try signing out and back in.";
   if (code === "42P01" || /does not exist|schema cache/i.test(err.message || "")) return "The database tables are missing. Did you run supabase/schema.sql?";
   if (/Failed to fetch|NetworkError/i.test(err.message || "")) return "Can't reach the database. Check your internet, and check config.js.";
   return err.message || String(err);
@@ -424,13 +424,13 @@ function renderDishList() {
 function suggestedAction(dish, cost, pct) {
   const t = targets();
   if (pct <= t.low) {
-    return { ok: true, text: `Healthy margin. This dish is <strong>${fmtPct(t.low - pct)}</strong> below your ${t.low}% target — no action needed.` };
+    return { ok: true, text: `Healthy margin. This dish is <strong>${fmtPct(t.low - pct)}</strong> below your ${t.low}% target. No action needed.` };
   }
   const idealPrice = cost / (t.mid / 100);
   const delta = idealPrice - dish.price;
   const portionCut = (1 - (dish.price * (t.mid / 100)) / cost) * 100;
   if (pct <= t.high) {
-    return { ok: false, text: `Trending high. Raise the price by <strong>${fmt(delta)}</strong> (to ${fmt(idealPrice)}) to bring this back to a ${t.mid}% target — or watch it, since it's still inside range.` };
+    return { ok: false, text: `Trending high. Raise the price by <strong>${fmt(delta)}</strong> (to ${fmt(idealPrice)}) to bring this back to a ${t.mid}% target, or keep an eye on it, since it's still inside your range.` };
   }
   return { ok: false, text: `Over target. Raise the price to <strong>${fmt(idealPrice)}</strong> (+${fmt(delta)}), or cut the portion by roughly <strong>${portionCut.toFixed(0)}%</strong> to bring food cost back to ${t.mid}%.` };
 }
@@ -537,10 +537,10 @@ function renderPerf() {
     const diff = top.pct - t.mid;
     const vsMid = diff >= 0 ? `running ${diff.toFixed(1)} points over your ${t.mid}% target food cost` : `above your ${t.low}% comfort line`;
     $("callout").innerHTML = `
-      <div class="tag">Cost % vs. dollars — the real tradeoff</div>
-      <p><strong>${esc(top.d.name)}</strong> is ${vsMid}, but it's your <strong>#${rank} earner by weekly dollar margin</strong> at ${fmt0(top.weeklyMargin)}/week from ${top.units} plates sold. Tightening the recipe or nudging the price even slightly here is worth more in real dollars than fixing a lower-volume dish with a "worse" percentage. That's the gap a percentage-only view misses.</p>`;
+      <div class="tag">Your biggest earner is over target</div>
+      <p><strong>${esc(top.d.name)}</strong> is ${vsMid}, but it's <strong>#${rank} on the menu for weekly margin</strong>: ${fmt0(top.weeklyMargin)} this week from ${top.units} plates. A small price bump or a slightly smaller portion here is worth more in real dollars than fixing a slow seller with a worse percentage.</p>`;
   } else {
-    $("callout").innerHTML = `<div class="tag">Cost % vs. dollars</div><p>Every dish that sold this week is within your target food cost range — no percentage-vs-volume tradeoffs to flag.</p>`;
+    $("callout").innerHTML = `<div class="tag">Food cost vs. sales</div><p>Every dish that sold this week is within your target food cost range. Nothing to flag.</p>`;
   }
   renderQuadrantChart(rows, avgUnits, avgMargin);
   renderPerfTable(byMargin, totalMargin, avgUnits, avgMargin);
@@ -621,7 +621,7 @@ function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
 function renderSales() {
   $("salesWeek").value = salesWeek;
   const existing = salesByWeek.get(salesWeek);
-  $("salesWeekNote").textContent = existing ? "Saved numbers loaded — edit and save again to update." : "Nothing saved for this week yet.";
+  $("salesWeekNote").textContent = existing ? "Saved numbers loaded. Edit and save again to update." : "Nothing saved for this week yet.";
   if (!dishes.length) {
     $("salesTable").innerHTML = `<tbody><tr><td class="muted">Add dishes on the Recipes tab first.</td></tr></tbody>`;
   } else {
@@ -691,7 +691,7 @@ function renderIngredients() {
   const q = $("ingSearch").value.trim().toLowerCase();
   const usage = usageMap();
   const list = [...ingredients.values()].filter((i) => !q || i.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
-  if (!ingredients.size) { $("ingTable").innerHTML = `<tbody><tr><td class="muted">No ingredients yet — add one above.</td></tr></tbody>`; return; }
+  if (!ingredients.size) { $("ingTable").innerHTML = `<tbody><tr><td class="muted">No ingredients yet. Add one above.</td></tr></tbody>`; return; }
   $("ingTable").innerHTML = `
     <thead><tr><th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th><th>Used in</th><th></th></tr></thead>
     <tbody>${list.map((i) => {
@@ -1052,7 +1052,7 @@ function typedLaborHours() {
 
 function renderLaborHours(typed = null) {
   const saved = laborByWeek.get(laborWeek);
-  $("laborWeekNote").textContent = saved ? "Saved hours loaded — edit and save again to update." : "Nothing saved for this week yet.";
+  $("laborWeekNote").textContent = saved ? "Saved hours loaded. Edit and save again to update." : "Nothing saved for this week yet.";
   const people = staff.filter((s) => s.active || saved?.has(s.id));
   if (!people.length) {
     $("laborTable").innerHTML = `<tbody><tr><td class="muted">Add your team under <strong>Your team</strong> first.</td></tr></tbody>`;
@@ -1150,7 +1150,7 @@ function copyLastWeek() {
 }
 
 function renderStaffTable() {
-  if (!staff.length) { $("staffTable").innerHTML = `<tbody><tr><td class="muted">No one on the team yet — add people above.</td></tr></tbody>`; return; }
+  if (!staff.length) { $("staffTable").innerHTML = `<tbody><tr><td class="muted">No one on the team yet. Add people above.</td></tr></tbody>`; return; }
   const deptOpts = (v) => DEPTS.map((d) => `<option value="${d}" ${d === v ? "selected" : ""}>${DEPT_LABEL[d]}</option>`).join("");
   $("staffTable").innerHTML = `
     <thead><tr><th>Name</th><th>Role</th><th>Department</th><th>Pay</th><th class="num">Rate ($)</th><th>Active</th><th></th></tr></thead>
@@ -1712,7 +1712,7 @@ async function saveSettings(e) {
 async function deleteRestaurant() {
   const typed = prompt(`This permanently deletes "${rest.name}" and ALL of its ingredients, recipes, sales, and scenarios.\n\nType the restaurant name to confirm:`);
   if (typed === null) return;
-  if (typed.trim() !== rest.name) { $("settingsMsg").textContent = "Name didn't match — nothing was deleted."; return; }
+  if (typed.trim() !== rest.name) { $("settingsMsg").textContent = "Name didn't match, so nothing was deleted."; return; }
   try {
     await run(sb.from("restaurants").delete().eq("id", rest.id));
     $("settingsDialog").close();
@@ -1726,8 +1726,8 @@ async function deleteAccount() {
   const email = user?.email || "";
   const typed = prompt(`This permanently deletes your account (${email}) and ALL of your restaurants, ingredients, recipes, sales, and scenarios. It can't be undone.\n\nAfterwards you can sign up again with the same email.\n\nType your email to confirm:`);
   if (typed === null) return;
-  if (typed.trim().toLowerCase() !== email.toLowerCase()) { toast("Email didn't match — nothing was deleted.", "err"); return; }
-  if (!confirm("Are you sure you want to delete your account?\n\nThis is your last chance — click OK to delete it forever, or Cancel to keep it.")) {
+  if (typed.trim().toLowerCase() !== email.toLowerCase()) { toast("Email didn't match, so nothing was deleted.", "err"); return; }
+  if (!confirm("Are you sure you want to delete your account?\n\nThis is your last chance. Click OK to delete it forever, or Cancel to keep it.")) {
     toast("Nothing was deleted. Your account is safe.");
     return;
   }
