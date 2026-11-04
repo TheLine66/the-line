@@ -138,7 +138,7 @@ window.SEEDS.kennedy = {
 
 // ---------------------------------------------------------------------
 // Sample 2: Kelley's (imaginary family-owned Irish gastropub, 40 seats)
-// Run by Maeve Kelley (front of house) and her brother Declan (chef).
+// Owned by Eric Kelley (front of house); Declan Kelley runs the kitchen.
 // A short menu, about $10,000 a week in food, and a team of eight.
 // Built to tell a story: Fish & Chips is the best-seller AND the worst
 // food-cost %, and the fish supplier just raised cod prices (see the
@@ -250,7 +250,7 @@ window.SEEDS.kelleys = {
   // earn Tennessee's tipped minimum wage plus tips. The owners pay
   // themselves a modest salary. Marco works a little overtime.
   staff: [
-    { name: "Maeve Kelley",  role: "Owner / general manager", department: "Mgmt", pay_type: "salary", rate: 650,  hours: 55 },
+    { name: "Eric Kelley",  role: "Owner / general manager", department: "Mgmt", pay_type: "salary", rate: 650,  hours: 55 },
     { name: "Declan Kelley", role: "Chef / co-owner",         department: "Mgmt", pay_type: "salary", rate: 700,  hours: 55 },
     { name: "Marco Ruiz",    role: "Line cook",               department: "BOH",  pay_type: "hourly", rate: 17.00, hours: 41 },
     { name: "Sam Ortiz",     role: "Prep cook & dishwasher",  department: "BOH",  pay_type: "hourly", rate: 12.50, hours: 26 },
@@ -263,7 +263,7 @@ window.SEEDS.kelleys = {
   // Net sales on MOD reports include the bar, so they run higher than the
   // food-only sales on the Weekly Sales tab.
   modReports: [
-    { daysAgo: 1, shift: "Dinner", manager: "Maeve Kelley", data: {
+    { daysAgo: 1, shift: "Dinner", manager: "Eric Kelley", data: {
       weather: "Rain", temp: "54", weather_notes: "Steady rain 5 to 8 PM. Two walk-in parties left when we quoted a 20-minute wait.",
       sales: "1520", hours_from: 17, hours_to: 21,
       hourly: { 17: 6, 18: 13, 19: 17, 20: 12, 21: 4 },
@@ -277,10 +277,10 @@ window.SEEDS.kelleys = {
         { type: "Slow service / long wait", table: "Bar, 2 guests", notes: "Waited 25 minutes for Fish & Chips during the 7 PM rush.", resolution: "Apologized and comped a pint." },
       ],
       comps: [
-        { type: "Recook", item: "Kelley's Pub Burger", amount: "5.65", reason: "Undercooked (Table 6)", approved: "Maeve" },
-        { type: "Comp: kitchen mistake", item: "Sticky Toffee Pudding", amount: "9.00", reason: "Sorry for the recook (Table 6)", approved: "Maeve" },
-        { type: "Comp: service mistake", item: "Pint of Guinness", amount: "7.00", reason: "Long ticket time at the bar", approved: "Maeve" },
-        { type: "Comp: VIP / regular", item: "Scotch Egg", amount: "9.00", reason: "The Murphys' 10th anniversary", approved: "Maeve" },
+        { type: "Recook", item: "Kelley's Pub Burger", amount: "5.65", reason: "Undercooked (Table 6)", approved: "Eric" },
+        { type: "Comp: kitchen mistake", item: "Sticky Toffee Pudding", amount: "9.00", reason: "Sorry for the recook (Table 6)", approved: "Eric" },
+        { type: "Comp: service mistake", item: "Pint of Guinness", amount: "7.00", reason: "Long ticket time at the bar", approved: "Eric" },
+        { type: "Comp: VIP / regular", item: "Scotch Egg", amount: "9.00", reason: "The Murphys' 10th anniversary", approved: "Eric" },
       ],
       eighty_six: "Fish & Chips 86'd at 8:45 PM. The cod order came in 10 lb short; supplier says Thursday. Down to the last keg of Guinness.",
       maintenance: "Walk-in door gasket is torn (temps still OK at 37°F). Fryer 2 is slow to heat back up; Declan is calling for service.",
@@ -386,13 +386,13 @@ window.SEEDS.kelleys = {
       }
       for (let i = 0, n = between(0, dinner ? 2 : 1); i < n; i++) {
         const [type, item, amount, reason] = pick(COMP);
-        comps.push({ type, item, amount: amount.toFixed(2), reason, approved: dinner ? "Maeve" : "Declan" });
+        comps.push({ type, item, amount: amount.toFixed(2), reason, approved: dinner ? "Eric" : "Declan" });
       }
       const short = employee.some((e) => /sick|no show|sent home/i.test(e.type));
       const fohSched = dinner ? 4 : 2, bohSched = dinner ? 3 : 2;
       const peakHour = from + curve.indexOf(Math.max(...curve));
 
-      reports.push({ daysAgo, shift, manager: dinner ? "Maeve Kelley" : "Declan Kelley", data: {
+      reports.push({ daysAgo, shift, manager: dinner ? "Eric Kelley" : "Declan Kelley", data: {
         weather, temp: String(between(lo, hi) - (dinner ? 4 : 0)),
         weather_notes: wet ? (dinner ? "Patio closed; walk-ins were slower." : "Lighter lunch traffic in the rain.") : weather === "Sunny" ? "Patio full." : "",
         sales: String(sales), hours_from: from, hours_to: from + curve.length - 1, hourly,
