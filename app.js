@@ -1723,6 +1723,7 @@ function renderSpecials() {
   document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === menuMode)));
   $("weeklyFields").classList.toggle("hidden", menuMode !== "weekly");
   $("partyFields").classList.toggle("hidden", menuMode !== "party");
+  $("eventFields").classList.toggle("hidden", menuMode !== "event");
   if (lastMenu) renderMenuResult(); else $("menuResult").classList.add("hidden");
 }
 
@@ -1737,7 +1738,9 @@ function menuRequest() {
       return { name: d.name, category: d.category, price: d.price, food_cost_pct: d.price ? (c / d.price) * 100 : 0, weekly_units: salesByWeek.get(sortedWeeks()[0])?.get(d.id) ?? null };
     }),
   };
-  if (menuMode === "party") {
+  if (menuMode === "event") {
+    body.event = { name: $("evName").value, colors: $("evColors").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, notes: $("evNotes").value };
+  } else if (menuMode === "party") {
     body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, budget: Number($("ptBudget").value) || 30, style: $("ptStyle").value, notes: $("ptNotes").value };
   } else {
     body.count = Number($("spCount").value) || 3;
@@ -1748,6 +1751,7 @@ function menuRequest() {
 
 async function makeMenu() {
   if (!ingredients.size) { toast("Add some ingredients first.", "err"); return; }
+  if (menuMode === "event" && !$("evName").value.trim()) { toast("Say what the event is first.", "err"); $("evName").focus(); return; }
   const btn = $("makeMenuBtn"), note = $("makeMenuNote");
   btn.disabled = true; note.textContent = "Gemini is writing your menu. This takes a few seconds…";
   try {
@@ -1796,6 +1800,33 @@ function costItem(item) {
   return { cost, lines, missing: lines.filter((l) => !l.ing).map((l) => l.name) };
 }
 
+// The printed menu's look, from Gemini's suggestion. Colors must be real
+// hex codes and readable together; anything else falls back safely.
+const HEX = /^#[0-9a-f]{6}$/i;
+function hexOr(v, fallback) { const x = String(v || "").trim(); return HEX.test(x) ? x : fallback; }
+function luminance(hex) {
+  const c = [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function contrast(a, b) { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); }
+const MENU_FONTS = {
+  bold: "Impact, Haettenschweiler, 'Arial Narrow Bold', 'Arial Black', sans-serif",
+  classic: "Georgia, 'Times New Roman', serif",
+  playful: "'Trebuchet MS', 'Segoe UI', Verdana, sans-serif",
+  elegant: "Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif",
+};
+function menuTheme(t = {}) {
+  const bg = hexOr(t.background, "#FBF9F5");
+  let ink = hexOr(t.text, "#262624");
+  if (contrast(bg, ink) < 4.5) ink = contrast(bg, "#111111") >= contrast(bg, "#FFFFFF") ? "#111111" : "#FFFFFF";
+  let accent = hexOr(t.accent, ink);
+  if (contrast(bg, accent) < 3) accent = ink;
+  let accent2 = hexOr(t.accent2, accent);
+  if (contrast(bg, accent2) < 3) accent2 = accent;
+  const style = String(t.style || "").toLowerCase().trim();
+  return { bg, ink, accent, accent2, style: MENU_FONTS[style] ? style : "classic" };
+}
+
 function renderMenuResult() {
   const { menu, mode, model, request } = lastMenu;
   const t = targets();
@@ -1804,6 +1835,21 @@ function renderMenuResult() {
   const costed = menu.items.map((it) => ({ it, ...costItem(it) }));
   const perPerson = costed.reduce((s, c) => s + c.cost, 0);
   const price = Number(menu.per_person_price) || (party ? request.party.budget : 0);
+
+  // 1. The menu guests see, in the theme's colors.
+  const th = menuTheme(menu.theme);
+  const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : "This week's specials";
+  const poster = `<div class="menu-poster mp-${th.style}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
+      <div class="mp-kicker">${esc(rest.name)} · ${esc(kicker)}</div>
+      <h3 class="mp-title">${esc(menu.title)}</h3>
+      ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
+      <div class="mp-items">${menu.items.map((it) => `<div class="mp-item">
+        <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${!party && Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
+        <div class="mp-desc">${esc(it.description)}</div></div>`).join("")}</div>
+      ${party && price ? `<div class="mp-foot">${fmt(price)} per guest</div>` : ""}
+    </div>`;
+
+  // 2. Behind the numbers: costs checked against real ingredient prices.
   const summary = party ? `
     <div class="metrics flush">
       <div class="metric"><div class="num mono">${fmt(price)}</div><div class="label">Price per guest</div></div>
@@ -1821,7 +1867,6 @@ function renderMenuResult() {
         <div>${party && it.course ? `<div class="special-course">${esc(it.course)}</div>` : ""}<h4>${esc(it.name)}</h4></div>
         ${!party && p > 0 ? `<div class="special-price mono">${fmt(p)}</div>` : ""}
       </div>
-      <p class="special-desc">${esc(it.description)}</p>
       <div class="special-nums">
         <div><div class="lbl">Food cost${party ? " per guest" : ""}</div><div class="val mono">${fmt(cost)}</div></div>
         ${pct === null ? "" : `<div><div class="lbl">Food cost %</div><div class="val mono ${st === "red" ? "rust" : ""}"><span class="dot ${st}"></span> ${fmtPct(pct)}</div></div>
@@ -1838,14 +1883,18 @@ function renderMenuResult() {
   const el = $("menuResult");
   el.classList.remove("hidden");
   el.innerHTML = `
-    <div class="chart-head"><h3>${esc(menu.title)}</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
-    ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
-    ${summary}
-    <div class="specials">${items}</div>
-    ${(menu.tips || []).length ? `<div class="section-label">Tips</div><ul class="menu-tips">${menu.tips.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    <div class="chart-head"><h3>Your menu</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
+    ${poster}
     <div class="row-actions">
+      <button class="applybtn" id="printMenuBtn" type="button">Print the menu</button>
       <button class="ghostbtn dark" id="remakeMenuBtn" type="button">Try another version</button>
-      <button class="ghostbtn dark" id="printMenuBtn" type="button">Print / save as PDF</button>
+    </div>
+    <div class="mp-details">
+      <div class="section-label">Behind the numbers</div>
+      ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
+      ${summary}
+      <div class="specials">${items}</div>
+      ${(menu.tips || []).length ? `<div class="section-label">Tips</div><ul class="menu-tips">${menu.tips.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
     </div>`;
 }
 

@@ -39,7 +39,7 @@ module.exports = async function handler(req, res) {
   if (!body || typeof body !== "object") return res.status(400).json({ error: "Nothing to work with." });
   if (JSON.stringify(body).length > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
   if (!Array.isArray(body.pantry) || !body.pantry.length) return res.status(400).json({ error: "Add some ingredients first." });
-  const mode = body.mode === "party" ? "party" : "weekly";
+  const mode = body.mode === "party" ? "party" : body.mode === "event" ? "event" : "weekly";
 
   // 3. Ask Gemini, with a fixed answer format.
   const payload = {
@@ -104,7 +104,12 @@ Rules:
 - Give amounts per ONE portion (per guest for party menus), in the same unit the ingredient list uses.
 - Prices should fit this restaurant: look at its current menu prices.
 - Fit the style and cuisine of the restaurant's current menu.
-- "why" is one or two sentences: what it uses up and why it should sell or make money.`;
+- "why" is one or two sentences: what it uses up and why it should sell or make money.
+
+Theme (always fill in "theme" and "tagline"):
+- Design the printed menu's look to fit the occasion. For a game day or event, use that event's team or event colors (or the colors the owner asks for), give the menu a short rallying title (for example a friendly rivalry slogan), and give every dish a fun themed name that still says what the food is. Keep it good-natured: no insults, no team logos.
+- For a party, fit the occasion. For weekly specials, fit the season and this restaurant.
+- Colors are 6-digit hex codes like #FF8200. Pick a background and a text color that are easy to read together.`;
 
 function buildRequest(mode, b) {
   const pantry = b.pantry.slice(0, 250).map((i) => {
@@ -123,6 +128,13 @@ function buildRequest(mode, b) {
 Guests: ${num(p.guests, 20)}. Budget: about $${num(p.budget, 30)} per person (food only). Service style: ${clip(p.style) || "sit-down"}.
 Make 4 to 6 items across courses (for example: starter, main, side, dessert). Set per_person_price close to the budget.
 Notes from the owner: ${clip(p.notes) || "none"}`;
+  } else if (mode === "event") {
+    const e = b.event || {};
+    ask = `Plan a game day / event menu for: ${clip(e.name) || "a big game"}.
+Colors the owner wants: ${clip(e.colors) || "the event's or teams' usual colors"}.
+Make ${Math.min(8, Math.max(2, num(e.count, 5)))} items guests can order: shareable snacks, a couple of mains, and a drink or dessert idea if it fits. Price them like the regular menu.
+Expected crowd: ${clip(e.crowd) || "busier than usual"}.
+Notes from the owner: ${clip(e.notes) || "none"}`;
   } else {
     ask = `Plan ${Math.min(6, Math.max(1, num(b.count, 3)))} weekly specials to run alongside the regular menu.
 Notes from the owner: ${clip(b.notes) || "none"}`;
@@ -176,6 +188,19 @@ const SCHEMA = {
       },
     },
     tips: { type: "ARRAY", items: { type: "STRING" }, description: "Up to 3 short practical tips" },
+    tagline: { type: "STRING", description: "A short line printed under the title on the menu" },
+    theme: {
+      type: "OBJECT",
+      description: "The printed menu's look",
+      properties: {
+        background: { type: "STRING", description: "Hex color for the menu background, e.g. #FF8200" },
+        text: { type: "STRING", description: "Hex color for the main text, readable on the background" },
+        accent: { type: "STRING", description: "Hex color for the title and lines" },
+        accent2: { type: "STRING", description: "A second hex color for small details" },
+        style: { type: "STRING", description: "Lettering style: one of bold, classic, playful, elegant" },
+      },
+      required: ["background", "text", "accent", "style"],
+    },
   },
   required: ["title", "items"],
 };

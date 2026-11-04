@@ -290,6 +290,7 @@
         <div class="mode-pick" role="group" aria-label="What kind of menu">
           <button type="button" data-mode="weekly" aria-pressed="true">Weekly specials</button>
           <button type="button" data-mode="party" aria-pressed="false">Party or group menu</button>
+          <button type="button" data-mode="event" aria-pressed="false">Game day / event</button>
         </div>
         <div class="form-grid" id="weeklyFields">
           <label>How many specials
@@ -305,6 +306,15 @@
             <select id="ptStyle"><option>Sit-down, plated</option><option>Family style</option><option>Buffet</option><option>Passed appetizers</option></select>
           </label>
           <label class="wide">Anything to keep in mind (optional)<input id="ptNotes" maxlength="300" placeholder="e.g. Two guests are vegetarian. No nuts."></label>
+        </div>
+        <div class="form-grid hidden" id="eventFields">
+          <label class="wide">What's the event?<input id="evName" maxlength="120" placeholder="e.g. Tennessee vs. Kentucky, Saturday 7 PM"></label>
+          <label class="wide">Colors (optional)<input id="evColors" maxlength="120" placeholder="e.g. Orange and white, or black and orange for a dark mode game"></label>
+          <label>How many items
+            <select id="evCount"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>8</option></select>
+          </label>
+          <label>Expected crowd (optional)<input id="evCrowd" maxlength="80" placeholder="e.g. Packed bar, 150 guests"></label>
+          <label class="wide">Anything to keep in mind (optional)<input id="evNotes" maxlength="300" placeholder="e.g. Lots of shareable plates. One vegetarian option."></label>
         </div>
         <div class="row-actions">
           <button class="applybtn" id="makeMenuBtn" type="button">Make the menu</button>
