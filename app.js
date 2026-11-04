@@ -90,6 +90,9 @@ let staff = [];                // [{id, name, role, department, pay_type, rate, 
 let laborByWeek = new Map();   // "YYYY-MM-DD" -> Map(staffId -> hours)
 let modReports = [];           // newest first: [{id, report_date, shift, manager, data}]
 let extrasReady = true;        // false until supabase/labor-and-mod.sql has been run
+let stockReady = true;         // false until supabase/spoilage.sql has been run (on hand + use by)
+let menuMode = "weekly";       // Specials page: "weekly" or "party"
+let lastMenu = null;           // the last menu Gemini wrote (not saved)
 let laborWeek = null;          // week shown on the Labor Costs tab
 let laborRaise = { dept: "all", pct: 0 };  // what-if wage change (not saved)
 let editingReportId = null;    // MOD Report ("new" for a new report)
@@ -179,6 +182,7 @@ async function selectRestaurant(id) {
   draft = null; draftDirty = false;
   editingReportId = null; modDraft = null; modDirty = false;
   laborWeek = null; laborRaise = { dept: "all", pct: 0 };
+  lastMenu = null;
   await loadRestaurantData();
   renderRestaurantSelect();
   show("appScreen");
@@ -187,8 +191,14 @@ async function selectRestaurant(id) {
 
 async function loadRestaurantData() {
   const rid = rest.id;
+  // On hand / use by come from an add-on SQL file; work without them if it hasn't been run.
+  let ingRes = await sb.from("ingredients").select(ingCols()).eq("restaurant_id", rid).order("name");
+  if (ingRes.error && stockReady && isMissingColumn(ingRes.error)) {
+    stockReady = false;
+    ingRes = await sb.from("ingredients").select(ingCols()).eq("restaurant_id", rid).order("name");
+  }
   const results = await Promise.all([
-    sb.from("ingredients").select("id,name,unit,cost").eq("restaurant_id", rid).order("name"),
+    ingRes,
     sb.from("dishes").select("id,name,category,price,sort_order").eq("restaurant_id", rid).order("sort_order").order("created_at"),
     sb.from("dish_items").select("dish_id,ingredient_id,qty").eq("restaurant_id", rid),
     sb.from("weekly_sales").select("dish_id,week_start,units").eq("restaurant_id", rid).order("week_start", { ascending: false }),
@@ -197,7 +207,7 @@ async function loadRestaurantData() {
   for (const r of results) if (r.error) { toast(friendlyError(r.error), "err"); throw r.error; }
   const [ing, dsh, items, sales, scen] = results.map((r) => r.data);
 
-  ingredients = new Map(ing.map((i) => [i.id, { ...i, cost: Number(i.cost) }]));
+  ingredients = new Map(ing.map((i) => [i.id, ingRow(i)]));
   dishes = dsh.map((d) => ({
     ...d,
     price: Number(d.price),
@@ -215,6 +225,27 @@ async function loadRestaurantData() {
   if (!selectedWeek || !salesByWeek.has(selectedWeek)) selectedWeek = sortedWeeks()[0] || null;
   if (!dishes.some((d) => d.id === selectedDishId)) selectedDishId = dishes[0]?.id || null;
   await loadExtras();
+}
+
+function ingCols() { return stockReady ? "id,name,unit,cost,on_hand,use_by" : "id,name,unit,cost"; }
+function ingRow(i) { return { ...i, cost: Number(i.cost), on_hand: i.on_hand == null ? null : Number(i.on_hand), use_by: i.use_by || null }; }
+function isMissingColumn(err) {
+  return /42703|PGRST204/.test(err?.code || "") || /on_hand|use_by/.test(err?.message || "");
+}
+
+// Days until an ingredient's use-by date (negative = already past). null if no date.
+function daysLeft(useBy) {
+  if (!useBy) return null;
+  const today = parseDay(dayStr(new Date()));
+  return Math.round((parseDay(useBy) - today) / 86400000);
+}
+function spoilTag(i) {
+  const d = daysLeft(i.use_by);
+  if (d === null) return "";
+  if (d < 0) return `<span class="spoil red">Expired</span>`;
+  if (d === 0) return `<span class="spoil red">Use today</span>`;
+  const cls = d <= 2 ? "red" : d <= 5 ? "amber" : "ok";
+  return `<span class="spoil ${cls}">${d <= 7 ? `Spoils in ${d} day${d === 1 ? "" : "s"}` : fmtDay(i.use_by)}</span>`;
 }
 
 // The Labor + MOD tables come from a separate SQL file. If it hasn't been
@@ -254,7 +285,17 @@ async function seedRestaurant(rid, key) {
   const S = (window.SEEDS || {})[key];
   if (!S) return;
   const keys = Object.keys(S.ingredients);
-  const ingRows = await run(sb.from("ingredients").insert(keys.map((k) => ({ restaurant_id: rid, ...S.ingredients[k] }))).select("id,name"));
+  const today = dayStr(new Date());
+  const rows = (withStock) => keys.map((k) => {
+    const { name, unit, cost } = S.ingredients[k];
+    const st = S.stock?.[k];
+    return withStock && st ? { restaurant_id: rid, name, unit, cost, on_hand: st[0], use_by: st[1] == null ? null : addDays(today, st[1]) }
+      : { restaurant_id: rid, name, unit, cost };
+  });
+  let ins = await sb.from("ingredients").insert(rows(stockReady)).select("id,name");
+  if (ins.error && stockReady && isMissingColumn(ins.error)) { stockReady = false; ins = await sb.from("ingredients").insert(rows(false)).select("id,name"); }
+  if (ins.error) { toast(friendlyError(ins.error), "err"); throw ins.error; }
+  const ingRows = ins.data;
   const ingIdByName = new Map(ingRows.map((r) => [r.name, r.id]));
   const ingId = (k) => ingIdByName.get(S.ingredients[k].name);
 
@@ -335,12 +376,12 @@ function computeAll() {
 
 // ================================================================ RENDER
 const PAGE_NAMES = { cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
-  recipes: "Recipes", labor: "Labor Costs", mod: "MOD Report" };
+  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
 
 // Which pages show as tabs in the row under the logo. Saved in this
 // browser; every page is always reachable from the Menu.
 const TABS_KEY = "line.tabs";
-const DEFAULT_TABS = ["cost", "perf", "labor", "mod"];
+const DEFAULT_TABS = ["cost", "perf", "specials", "labor", "mod"];
 function pinnedTabs() {
   try {
     const v = JSON.parse(safeGet(TABS_KEY) || "null");
@@ -389,6 +430,7 @@ function render() {
   else if (activePage === "sales") renderSales();
   else if (activePage === "ingredients") renderIngredients();
   else if (activePage === "recipes") renderRecipes();
+  else if (activePage === "specials") renderSpecials();
   else if (activePage === "labor") renderLabor();
   else if (activePage === "mod") renderMod();
 }
@@ -749,55 +791,80 @@ function usageMap() {
 function renderIngredients() {
   const q = $("ingSearch").value.trim().toLowerCase();
   const usage = usageMap();
+  document.querySelectorAll(".stock-field").forEach((el) => el.classList.toggle("hidden", !stockReady));
   const list = [...ingredients.values()].filter((i) => !q || i.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
   if (!ingredients.size) { $("ingTable").innerHTML = `<tbody><tr><td class="muted">No ingredients yet. Add one above.</td></tr></tbody>`; return; }
+  const cols = stockReady ? 7 : 5;
   $("ingTable").innerHTML = `
-    <thead><tr><th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th><th>Used in</th><th></th></tr></thead>
+    <thead><tr><th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th>${stockReady ? `<th class="num">On hand</th><th>Use by</th>` : ""}<th>Used in</th><th></th></tr></thead>
     <tbody>${list.map((i) => {
       const used = usage.get(i.id) || [];
       return `<tr data-row="${i.id}">
         <td><input data-id="${i.id}" data-field="name" value="${esc(i.name)}" maxlength="100" aria-label="Name"></td>
         <td style="width:90px"><input data-id="${i.id}" data-field="unit" value="${esc(i.unit)}" maxlength="20" list="unitList" aria-label="Unit"></td>
-        <td class="num" style="width:150px"><input class="num mono" data-id="${i.id}" data-field="cost" type="number" min="0" step="0.01" value="${trimNum(i.cost)}" aria-label="Cost"></td>
+        <td class="num" style="width:140px"><input class="num mono" data-id="${i.id}" data-field="cost" type="number" min="0" step="0.01" value="${trimNum(i.cost)}" aria-label="Cost"></td>
+        ${stockReady ? `<td class="num" style="width:110px"><input class="num mono" data-id="${i.id}" data-field="on_hand" type="number" min="0" step="0.5" value="${i.on_hand == null ? "" : trimNum(i.on_hand)}" placeholder="—" aria-label="On hand"></td>
+        <td style="width:250px"><div class="useby"><input data-id="${i.id}" data-field="use_by" type="date" value="${i.use_by || ""}" aria-label="Use by"><span data-tag="${i.id}">${spoilTag(i)}</span></div></td>` : ""}
         <td class="used" title="${esc(used.join(", "))}">${used.length ? `${used.length} dish${used.length > 1 ? "es" : ""}` : "—"}</td>
         <td class="num"><button class="iconbtn" data-del-ing="${i.id}" type="button" aria-label="Delete ${esc(i.name)}">✕</button></td>
       </tr>`;
-    }).join("") || `<tr><td colspan="5" class="muted">Nothing matches "${esc(q)}".</td></tr>`}</tbody>`;
+    }).join("") || `<tr><td colspan="${cols}" class="muted">Nothing matches "${esc(q)}".</td></tr>`}</tbody>`;
 }
 
 async function updateIngredient(input) {
   const id = input.dataset.id, field = input.dataset.field;
   const ing = ingredients.get(id);
   if (!ing) return;
+  const shown = (f) => (f === "cost" ? trimNum(ing.cost) : f === "on_hand" ? (ing.on_hand == null ? "" : trimNum(ing.on_hand)) : ing[f] ?? "");
   let val = input.value.trim();
   if (field === "cost") {
     val = Number(val);
-    if (input.value.trim() === "" || !Number.isFinite(val) || val < 0) { toast("Cost must be a number, 0 or more.", "err"); input.value = trimNum(ing.cost); return; }
+    if (input.value.trim() === "" || !Number.isFinite(val) || val < 0) { toast("Cost must be a number, 0 or more.", "err"); input.value = shown(field); return; }
     if (val === ing.cost) return;
+  } else if (field === "on_hand") {
+    val = val === "" ? null : Number(val);
+    if (val !== null && (!Number.isFinite(val) || val < 0)) { toast("On hand must be a number, 0 or more (or blank).", "err"); input.value = shown(field); return; }
+    if (val === ing.on_hand) return;
+  } else if (field === "use_by") {
+    val = val || null;
+    if (val === ing.use_by) return;
   } else {
     if (!val) { toast("That can't be blank.", "err"); input.value = ing[field]; return; }
     if (val === ing[field]) return;
   }
   try {
-    const row = await run(sb.from("ingredients").update({ [field]: val, updated_at: new Date().toISOString() }).eq("id", id).select("id,name,unit,cost").single());
-    ingredients.set(id, { ...row, cost: Number(row.cost) });
+    const row = await run(sb.from("ingredients").update({ [field]: val, updated_at: new Date().toISOString() }).eq("id", id).select(ingCols()).single());
+    const fresh = ingRow(row);
+    ingredients.set(id, fresh);
+    const tag = document.querySelector(`[data-tag="${id}"]`);
+    if (tag) tag.innerHTML = spoilTag(fresh);
     const tr = input.closest("tr");
     tr.classList.remove("saved"); void tr.offsetWidth; tr.classList.add("saved");
     toast(`Saved ${row.name}.`);
-  } catch { input.value = field === "cost" ? trimNum(ing.cost) : ing[field]; }
+  } catch { input.value = shown(field); }
 }
 
 async function addIngredient(e) {
   e.preventDefault();
   const name = $("newIngName").value.trim(), unit = $("newIngUnit").value.trim(), cost = Number($("newIngCost").value);
   if (!name || !unit || !Number.isFinite(cost) || cost < 0) { toast("Fill in a name, unit, and a cost of 0 or more.", "err"); return; }
+  const row = { restaurant_id: rest.id, name, unit, cost };
+  if (stockReady) {
+    const oh = $("newIngOnHand").value.trim();
+    if (oh !== "") {
+      const n = Number(oh);
+      if (!Number.isFinite(n) || n < 0) { toast("On hand must be a number, 0 or more (or blank).", "err"); return; }
+      row.on_hand = n;
+    }
+    if ($("newIngUseBy").value) row.use_by = $("newIngUseBy").value;
+  }
   try {
-    const row = await run(sb.from("ingredients").insert({ restaurant_id: rest.id, name, unit, cost }).select("id,name,unit,cost").single());
-    ingredients.set(row.id, { ...row, cost: Number(row.cost) });
-    $("newIngName").value = ""; $("newIngCost").value = "";
+    const saved = await run(sb.from("ingredients").insert(row).select(ingCols()).single());
+    ingredients.set(saved.id, ingRow(saved));
+    $("newIngName").value = ""; $("newIngCost").value = ""; $("newIngOnHand").value = ""; $("newIngUseBy").value = "";
     $("newIngName").focus();
     renderIngredients();
-    toast(`Added ${row.name}.`);
+    toast(`Added ${saved.name}.`);
   } catch { /* toast shown */ }
 }
 
@@ -1627,6 +1694,161 @@ async function deleteReport() {
   } catch { /* toast shown */ }
 }
 
+// ---------------------------------------------------------- Specials (Google Gemini)
+// The page asks /api/specials (a Vercel server function holding the Gemini
+// key) for a menu, then re-does the cost math itself from real prices.
+
+function soonToSpoil(withinDays = 7) {
+  return [...ingredients.values()]
+    .map((i) => ({ i, d: daysLeft(i.use_by) }))
+    .filter((x) => x.d !== null && x.d <= withinDays)
+    .sort((a, b) => a.d - b.d || a.i.name.localeCompare(b.i.name));
+}
+
+function renderSpecials() {
+  $("specialsSetup").classList.toggle("hidden", stockReady);
+  if (!stockReady) {
+    $("specialsSetup").innerHTML = `<h3>One more database step</h3><p>To track what's spoiling, the Ingredients tab needs two new columns. In Supabase, open <strong>SQL Editor</strong> → <strong>New query</strong>, paste in everything from <code>supabase/spoilage.sql</code>, click <strong>Run</strong>, then reload this page. You can still make menus without it.</p>`;
+  }
+  const soon = soonToSpoil();
+  const atRisk = soon.reduce((s, x) => s + (x.i.on_hand || 0) * x.i.cost, 0);
+  $("spoilList").innerHTML = soon.length ? `
+    <p class="spoil-total">About <strong>${fmt0(atRisk)}</strong> of food spoils in the next 7 days if it isn't used.</p>
+    <table class="edit"><thead><tr><th>Ingredient</th><th class="num">On hand</th><th class="num">Worth</th><th>Use by</th></tr></thead>
+    <tbody>${soon.map(({ i }) => `<tr><td>${esc(i.name)}</td>
+      <td class="num mono">${i.on_hand == null ? "—" : `${trimNum(i.on_hand)} ${esc(i.unit)}`}</td>
+      <td class="num mono">${i.on_hand == null ? "—" : fmt(i.on_hand * i.cost)}</td>
+      <td>${spoilTag(i)}</td></tr>`).join("")}</tbody></table>`
+    : `<p class="muted">Nothing is due to spoil in the next 7 days. Add "Use by" dates on the Ingredients tab to see what's coming up.</p>`;
+  document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === menuMode)));
+  $("weeklyFields").classList.toggle("hidden", menuMode !== "weekly");
+  $("partyFields").classList.toggle("hidden", menuMode !== "party");
+  if (lastMenu) renderMenuResult(); else $("menuResult").classList.add("hidden");
+}
+
+// Everything Gemini needs to know, in a compact form.
+function menuRequest() {
+  const t = targets();
+  const body = {
+    mode: menuMode, restaurant: rest.name, today: dayStr(new Date()), targets: t,
+    pantry: [...ingredients.values()].map((i) => ({ name: i.name, unit: i.unit, cost: i.cost, on_hand: i.on_hand, days_left: daysLeft(i.use_by) })),
+    menu: dishes.map((d) => {
+      const c = d.items.reduce((s, it) => s + (ingredients.get(it.ingredient_id)?.cost || 0) * it.qty, 0);
+      return { name: d.name, category: d.category, price: d.price, food_cost_pct: d.price ? (c / d.price) * 100 : 0, weekly_units: salesByWeek.get(sortedWeeks()[0])?.get(d.id) ?? null };
+    }),
+  };
+  if (menuMode === "party") {
+    body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, budget: Number($("ptBudget").value) || 30, style: $("ptStyle").value, notes: $("ptNotes").value };
+  } else {
+    body.count = Number($("spCount").value) || 3;
+    body.notes = $("spNotes").value;
+  }
+  return body;
+}
+
+async function makeMenu() {
+  if (!ingredients.size) { toast("Add some ingredients first.", "err"); return; }
+  const btn = $("makeMenuBtn"), note = $("makeMenuNote");
+  btn.disabled = true; note.textContent = "Gemini is writing your menu. This takes a few seconds…";
+  try {
+    const { data } = await sb.auth.getSession();
+    const request = menuRequest();
+    const r = await fetch("/api/specials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+      body: JSON.stringify(request),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (r.status === 503 || r.status === 404) {
+      note.textContent = "";
+      $("menuResult").classList.remove("hidden");
+      $("menuResult").innerHTML = `<h3>The menu assistant isn't connected yet</h3><p>Whoever set up The Line needs to add the Gemini key in Vercel. The steps are in the README under "Specials (Google Gemini)".</p>`;
+      return;
+    }
+    if (!r.ok) { note.textContent = ""; toast(out.error || "Something went wrong. Try again.", "err"); return; }
+    lastMenu = { ...out, request };
+    note.textContent = "";
+    renderMenuResult();
+    $("menuResult").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch {
+    note.textContent = "";
+    toast("Couldn't reach the menu assistant. Check your internet and try again.", "err");
+  } finally { btn.disabled = false; }
+}
+
+// Match the ingredient names Gemini used to the real ingredient list.
+function findIngredient(name) {
+  const n = String(name || "").trim().toLowerCase();
+  const all = [...ingredients.values()];
+  return all.find((i) => i.name.toLowerCase() === n)
+    || all.find((i) => i.name.toLowerCase().includes(n) || n.includes(i.name.toLowerCase())) || null;
+}
+
+function costItem(item) {
+  let cost = 0;
+  const lines = (item.ingredients || []).map((x) => {
+    const ing = x.not_stocked ? null : findIngredient(x.name);
+    const amount = Number(x.amount) || 0;
+    const line = ing ? ing.cost * amount : 0;
+    cost += line;
+    return { name: ing ? ing.name : x.name, ing, amount, line, d: ing ? daysLeft(ing.use_by) : null };
+  });
+  return { cost, lines, missing: lines.filter((l) => !l.ing).map((l) => l.name) };
+}
+
+function renderMenuResult() {
+  const { menu, mode, model, request } = lastMenu;
+  const t = targets();
+  const party = mode === "party";
+  const guests = party ? request.party.guests : 0;
+  const costed = menu.items.map((it) => ({ it, ...costItem(it) }));
+  const perPerson = costed.reduce((s, c) => s + c.cost, 0);
+  const price = Number(menu.per_person_price) || (party ? request.party.budget : 0);
+  const summary = party ? `
+    <div class="metrics flush">
+      <div class="metric"><div class="num mono">${fmt(price)}</div><div class="label">Price per guest</div></div>
+      <div class="metric"><div class="num mono">${fmt(perPerson)}</div><div class="label">Food cost per guest</div></div>
+      <div class="metric ${price && statusOf((perPerson / price) * 100) === "red" ? "warn" : ""}"><div class="num mono">${price ? fmtPct((perPerson / price) * 100) : "—"}</div><div class="label">Food cost % (goal ${t.mid}%)</div></div>
+      <div class="metric"><div class="num mono">${fmt0(price * guests)}</div><div class="label">Total for ${guests} guests</div></div>
+    </div>` : "";
+  const items = costed.map(({ it, cost, lines, missing }) => {
+    const p = Number(it.price);
+    const pct = !party && p > 0 ? (cost / p) * 100 : null;
+    const st = pct === null ? "" : statusOf(pct);
+    const usesSoon = lines.filter((l) => l.d !== null && l.d <= 5).map((l) => `${esc(l.name)} (${l.d < 0 ? "expired" : l.d === 0 ? "today" : `${l.d} day${l.d === 1 ? "" : "s"}`})`);
+    return `<article class="special">
+      <div class="special-head">
+        <div>${party && it.course ? `<div class="special-course">${esc(it.course)}</div>` : ""}<h4>${esc(it.name)}</h4></div>
+        ${!party && p > 0 ? `<div class="special-price mono">${fmt(p)}</div>` : ""}
+      </div>
+      <p class="special-desc">${esc(it.description)}</p>
+      <div class="special-nums">
+        <div><div class="lbl">Food cost${party ? " per guest" : ""}</div><div class="val mono">${fmt(cost)}</div></div>
+        ${pct === null ? "" : `<div><div class="lbl">Food cost %</div><div class="val mono ${st === "red" ? "rust" : ""}"><span class="dot ${st}"></span> ${fmtPct(pct)}</div></div>
+        <div><div class="lbl">Margin per plate</div><div class="val mono">${fmt(p - cost)}</div></div>`}
+      </div>
+      ${usesSoon.length ? `<p class="special-uses"><strong>Uses up:</strong> ${usesSoon.join(", ")}</p>` : ""}
+      <p class="special-why">${esc(it.why)}</p>
+      <details><summary>Ingredients per ${party ? "guest" : "plate"}</summary>
+        <ul>${lines.map((l) => `<li>${esc(l.name)}: ${trimNum(l.amount)} ${esc(l.ing?.unit || "")}${l.ing ? ` (${fmt(l.line)})` : " <em>(not in your ingredient list, not costed)</em>"}</li>`).join("")}</ul>
+      </details>
+      ${missing.length ? `<p class="special-warn">Needs ${missing.map(esc).join(", ")}, which you don't stock. Add it on the Ingredients tab to cost it.</p>` : ""}
+    </article>`;
+  }).join("");
+  const el = $("menuResult");
+  el.classList.remove("hidden");
+  el.innerHTML = `
+    <div class="chart-head"><h3>${esc(menu.title)}</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
+    ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
+    ${summary}
+    <div class="specials">${items}</div>
+    ${(menu.tips || []).length ? `<div class="section-label">Tips</div><ul class="menu-tips">${menu.tips.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    <div class="row-actions">
+      <button class="ghostbtn dark" id="remakeMenuBtn" type="button">Try another version</button>
+      <button class="ghostbtn dark" id="printMenuBtn" type="button">Print / save as PDF</button>
+    </div>`;
+}
+
 // ---------------------------------------------------------- What-if + scenarios
 function resetWhatIf() {
   adjustments = {}; priceMultipliers = {};
@@ -2020,6 +2242,14 @@ function wireControls() {
     else if (t.id === "saveDishBtn") saveDish();
     else if (t.id === "deleteDishBtn") deleteDish();
     else if (t.id === "revertDishBtn") { draftDirty = false; startEditing(draft.id); renderRecipeEditor(); }
+  });
+
+  // Specials
+  document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { menuMode = b.dataset.mode; renderSpecials(); }));
+  $("makeMenuBtn").addEventListener("click", makeMenu);
+  $("menuResult").addEventListener("click", (e) => {
+    if (e.target.closest("#remakeMenuBtn")) makeMenu();
+    else if (e.target.closest("#printMenuBtn")) window.print();
   });
 
   // Labor Costs

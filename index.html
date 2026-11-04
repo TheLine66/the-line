@@ -253,6 +253,8 @@
           <label class="stack">Name<input id="newIngName" required maxlength="100" placeholder="e.g. Short rib"></label>
           <label class="stack">Unit<input id="newIngUnit" required maxlength="20" value="oz" list="unitList" class="short"></label>
           <label class="stack">Cost per unit ($)<input id="newIngCost" type="number" required min="0" step="0.01" class="short" placeholder="0.00"></label>
+          <label class="stack stock-field">On hand<input id="newIngOnHand" type="number" min="0" step="0.5" class="short" placeholder="optional"></label>
+          <label class="stack stock-field">Use by<input id="newIngUseBy" type="date"></label>
           <button class="applybtn" type="submit">Add</button>
         </form>
         <datalist id="unitList"><option value="oz"><option value="lb"><option value="each"><option value="g"><option value="kg"><option value="fl oz"><option value="qt"><option value="gal"></datalist>
@@ -277,6 +279,44 @@
       </div>
       <div class="panel" id="recipeEditor"></div>
     </main>
+  </div>
+
+  <!-- Specials (menus written by Google Gemini) -->
+  <div class="page" id="page-specials">
+    <div class="perf-wrap">
+      <div class="chart-card hidden" id="specialsSetup"></div>
+      <div class="chart-card">
+        <div class="chart-head"><h3>Spoiling soon</h3><span class="note">From the "Use by" dates on the Ingredients tab</span></div>
+        <div id="spoilList"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-head"><h3>Make a menu</h3><span class="note">Written by Google Gemini from your ingredients. The app checks the cost math.</span></div>
+        <div class="mode-pick" role="group" aria-label="What kind of menu">
+          <button type="button" data-mode="weekly" aria-pressed="true">Weekly specials</button>
+          <button type="button" data-mode="party" aria-pressed="false">Party or group menu</button>
+        </div>
+        <div class="form-grid" id="weeklyFields">
+          <label>How many specials
+            <select id="spCount"><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
+          </label>
+          <label class="wide">Anything to keep in mind (optional)<input id="spNotes" maxlength="300" placeholder="e.g. Make one vegetarian. Nothing fried."></label>
+        </div>
+        <div class="form-grid hidden" id="partyFields">
+          <label>Type of group<input id="ptType" maxlength="80" placeholder="e.g. Birthday dinner, office lunch"></label>
+          <label>Guests<input id="ptGuests" type="number" min="2" max="500" step="1" value="20"></label>
+          <label>Budget per person ($)<input id="ptBudget" type="number" min="5" max="500" step="1" value="30"></label>
+          <label>Style
+            <select id="ptStyle"><option>Sit-down, plated</option><option>Family style</option><option>Buffet</option><option>Passed appetizers</option></select>
+          </label>
+          <label class="wide">Anything to keep in mind (optional)<input id="ptNotes" maxlength="300" placeholder="e.g. Two guests are vegetarian. No nuts."></label>
+        </div>
+        <div class="row-actions">
+          <button class="applybtn" id="makeMenuBtn" type="button">Make the menu</button>
+          <span class="note" id="makeMenuNote"></span>
+        </div>
+      </div>
+      <div class="chart-card hidden" id="menuResult"></div>
+    </div>
   </div>
 
   <!-- Labor Costs -->

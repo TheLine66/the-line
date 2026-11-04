@@ -27,6 +27,7 @@ You'll make three free accounts, connect them, and you're done.
 | `styles.css` | Colors and fonts | No |
 | `design.css` | The current look ("Kitchen Almanac"); its colors are in the box at the top | Only if you want new colors |
 | `images/kitchen.jpg` | The kitchen photo behind the sign-in screen (upload it with the other files) | Only to swap the photo |
+| `api/specials.js` | The server helper that talks to Google Gemini for the Specials page. Your Gemini key lives in Vercel's settings, not here | No |
 | `app.js` | All the brains: math, saving, loading | No |
 | `seed-data.js` | The sample Kennedy menu, loaded once if you ask for it | No |
 | `config.js` | **Your two Supabase "addresses"** | **Yes, once (Step 4)** |
@@ -225,6 +226,38 @@ This makes sure any email links (for example, password resets) send people to yo
 **Delete my account:** at the bottom of **Settings** (or on the "Add a restaurant" screen). Type your email, then confirm "Are you sure?". It deletes your login and all your restaurants, so you can sign up again with the same email. (If you set up your database before this button existed, run `supabase/delete-account.sql` in the SQL Editor once first.)
 
 ---
+
+## Specials (Google Gemini)
+
+The **Specials** page writes a weekly specials menu, or a party menu for a group, from your own ingredients. It uses up what's about to spoil first and keeps food cost near your goal. Google's Gemini AI writes the menu. The Line then checks every dish's cost with your real ingredient prices.
+
+**How it works, in one picture:** your web page → a small helper on Vercel's server (`api/specials.js`) → Google Gemini → back to your page. The helper holds your Gemini key, so the key is never inside the web page where someone could copy it. It also checks that the person asking is signed in to The Line.
+
+### Step A: Track what's on hand and when it spoils (Supabase, once)
+1. In Supabase, open **SQL Editor** → **New query**.
+2. Paste in everything from `supabase/spoilage.sql` and click **Run**. You should see "Success. No rows returned."
+3. On the **Ingredients** tab, each ingredient now has **On hand** and **Use by**. Fill them in. A sample Kelley's comes with them filled in.
+
+### Step B: Give Vercel your Gemini key (once)
+Your key is like a password. **Never** put it in a file, in GitHub, or in a chat. It only goes in Vercel's settings:
+1. Go to **vercel.com** → open the **the-line** project → **Settings** → **Environment Variables**.
+2. Add these three, one at a time (Name, then Value, then **Save**):
+
+   | Name | Value |
+   |---|---|
+   | `GEMINI_API_KEY` | your Gemini API key from Google AI Studio |
+   | `SUPABASE_URL` | the same Project URL that's in `config.js` (like `https://abcdefgh.supabase.co`) |
+   | `SUPABASE_KEY` | the same Publishable key that's in `config.js` (starts with `sb_publishable_`) |
+
+3. Go to **Deployments**, click the **⋯** next to the newest one, and choose **Redeploy**. Vercel only picks up new settings on a fresh deploy.
+
+### Step C: Use it
+Open **Specials**, pick **Weekly specials** or **Party or group menu**, fill in the boxes, and click **Make the menu**. It takes a few seconds. Don't like it? Click **Try another version**. **Print / save as PDF** gives you a clean copy.
+
+- **Which model:** it uses Gemini 3.1 Flash-Lite. If Google names it differently for your key, the helper finds your Flash-Lite model by itself. To pick a specific model, add a fourth variable, `GEMINI_MODEL`, with the model's name.
+- **If it says "isn't connected yet":** one of the three variables is missing, or you haven't redeployed since adding them.
+- **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.
+- **Always look it over:** the AI can suggest odd pairings, or ingredients you don't stock (the page flags those).
 
 ## Making changes later
 

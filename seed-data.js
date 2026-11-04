@@ -230,6 +230,21 @@ window.SEEDS.kelleys = {
   scenarios: [
     { name: "Cod +18% (supplier notice)", adjustments: { cod: 18 } },
   ],
+  // What's in the walk-in for the Specials page: [amount on hand, days
+  // until it must be used]. Dates count from the day the restaurant is
+  // created, so a few things are always about to spoil.
+  stock: {
+    cod: [60, 2], groundchuck: [80, 3], groundlamb: [35, 3], cornedbeef: [70, 9], lambshank: [8, 6],
+    bangers: [50, 7], wings: [90, 4], baconrashers: [24, 10], egg: [36, 18],
+    cheddar: [40, 25], swiss: [20, 21], cream: [64, 2], icecream: [96, 60],
+    chips: [150, 3], potato: [200, 14], colcannon: [60, 2], rootveg: [80, 5], leeks: [30, 4], lettuce: [16, 1],
+    tomato: [24, 2], celery: [30, 6], chives: [4, 3], lemon: [20, 9],
+    beerbatter: [40, 1], tartar: [30, 5], mushypeas: [40, 3], pubsauce: [32, 10], bbqsauce: [40, 21], bluedip: [24, 4],
+    beercheese: [30, 5], mustardcream: [20, 6], curry: [36, 7], oniongravy: [30, 4], caramelonion: [20, 5],
+    sauerkraut: [48, 30], toffee: [30, 14],
+    stout: [128, 60], chickenstock: [160, 5], panko: [64, 120], bun: [36, 4], rye: [20, 5], sodabread: [40, 2],
+    pretzel: [24, 3], toffeecake: [18, 4],
+  },
   // The team for the Labor Costs tab. Hourly hours follow weekFactors.
   // rate = $/hour (hourly) or $/week (salary). Servers and the bartender
   // earn Tennessee's tipped minimum wage plus tips. The owners pay

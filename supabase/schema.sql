@@ -250,3 +250,8 @@ create policy "own mod reports" on public.mod_reports
 
 grant select, insert, update, delete on public.staff, public.labor_hours, public.mod_reports to authenticated;
 revoke all on public.staff, public.labor_hours, public.mod_reports from anon;
+
+-- ---------- "On hand" and "Use by" for ingredients (same as supabase/spoilage.sql)
+alter table public.ingredients
+  add column if not exists on_hand numeric(10,2) check (on_hand >= 0),
+  add column if not exists use_by  date;
