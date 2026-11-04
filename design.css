@@ -252,6 +252,16 @@ footer { color: var(--ink-2); }
 .mode-pick button { background: var(--surface); color: var(--ink); border: none; border-left: 1px solid var(--line-strong); font: 600 14px Verdana, Geneva, sans-serif; padding: 9px 16px; cursor: pointer; }
 .mode-pick button:first-child { border-left: none; }
 .mode-pick button[aria-pressed="true"] { background: var(--green); color: #fff; }
+.voice-field { display: flex; gap: 8px; align-items: stretch; }
+.voice-field input { flex: 1; min-width: 0; }
+.mic-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }
+.mic-btn[hidden] { display: none; }
+.mic-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+#appScreen .mic-btn.listening { border-color: var(--over); color: var(--over); font-weight: 700; }
+.mic-btn.listening .mic-icon { animation: mic-pulse 1s ease-in-out infinite; }
+@keyframes mic-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .mic-btn.listening .mic-icon { animation: none; } }
+@media (max-width: 480px) { .mic-text { display: none; } .mic-btn.listening .mic-text { display: inline; } }
 .menu-intro { font-size: 15px; margin: 0 0 18px; max-width: 70ch; }
 .specials { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0 28px; }
 .special { border-top: 2px solid var(--ink); padding: 14px 0 18px; }

@@ -1898,6 +1898,47 @@ function renderMenuResult() {
     </div>`;
 }
 
+// ---------------------------------------------------------- Voice typing
+// The browser's own speech-to-text (Chrome, Edge, Safari). Where it isn't
+// available the Speak buttons stay hidden.
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let voice = null;   // the one recording in progress: { rec, btn }
+
+function setVoiceButton(btn, listening) {
+  btn.classList.toggle("listening", listening);
+  btn.setAttribute("aria-pressed", String(listening));
+  btn.querySelector(".mic-text").textContent = listening ? "Listening… tap to stop" : "Speak";
+}
+
+function toggleVoice(btn) {
+  if (voice) {
+    const same = voice.btn === btn;
+    voice.rec.stop();
+    if (same) return;
+  }
+  const input = $(btn.dataset.voiceFor);
+  const rec = new SpeechRec();
+  rec.lang = navigator.language || "en-US";
+  rec.interimResults = true;
+  const before = input.value.trim();
+  voice = { rec, btn };
+  setVoiceButton(btn, true);
+  rec.onresult = (e) => {
+    let said = "";
+    for (const r of e.results) said += r[0].transcript;
+    input.value = ((before ? before + " " : "") + said.trim()).slice(0, input.maxLength > 0 ? input.maxLength : 300);
+  };
+  rec.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") toast("Allow microphone access for this site to use voice typing.", "err");
+    else if (e.error !== "aborted" && e.error !== "no-speech") toast("Voice typing stopped. Try again.", "err");
+  };
+  rec.onend = () => {
+    setVoiceButton(btn, false);
+    if (voice && voice.rec === rec) voice = null;
+  };
+  try { rec.start(); } catch { rec.onend(); }
+}
+
 // ---------------------------------------------------------- What-if + scenarios
 function resetWhatIf() {
   adjustments = {}; priceMultipliers = {};
@@ -2293,8 +2334,14 @@ function wireControls() {
     else if (t.id === "revertDishBtn") { draftDirty = false; startEditing(draft.id); renderRecipeEditor(); }
   });
 
+  // Voice typing for the "Anything to keep in mind" boxes
+  document.querySelectorAll("[data-voice-for]").forEach((btn) => {
+    btn.hidden = !SpeechRec;
+    btn.addEventListener("click", (e) => { e.preventDefault(); toggleVoice(btn); });
+  });
+
   // Specials
-  document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { menuMode = b.dataset.mode; renderSpecials(); }));
+  document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { if (voice) voice.rec.stop(); menuMode = b.dataset.mode; renderSpecials(); }));
   $("makeMenuBtn").addEventListener("click", makeMenu);
   $("menuResult").addEventListener("click", (e) => {
     if (e.target.closest("#remakeMenuBtn")) makeMenu();
