@@ -45,76 +45,81 @@ header { background: var(--green); border-bottom: 1px solid var(--ink); padding:
 .user-email { color: #C9D7CE; }
 header select, header .ghostbtn { background: #FBF9F5; border: 1px solid var(--ink); }
 
-/* Old-style boxed tabs that join the page below. */
-.tabs { gap: 3px; margin-top: 14px; }
+/* Tabs: one even row; the open tab is the page color. */
+.tabs { gap: 2px; margin-top: 14px; }
 .tab {
-  background: #DDE5DF; color: var(--green); border: 1px solid var(--ink); border-bottom: none; border-radius: 0;
-  font-family: Verdana, sans-serif; font-size: 12.5px; font-weight: 700; padding: 7px 13px 6px; margin-top: 4px;
+  background: rgba(255, 255, 255, 0.10); color: #E4ECE7; border: none; border-radius: 4px 4px 0 0;
+  font-family: Verdana, sans-serif; font-size: 12.5px; font-weight: 700; padding: 9px 14px;
 }
-.tab:hover { background: #F3EBD3; color: var(--ink); }
-.tab.active { background: var(--bg); color: var(--ink); margin-top: 0; padding-bottom: 11px; margin-bottom: -1px; }
+.tab:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.tab.active { background: var(--bg); color: var(--green); }
 
-/* ---------- Every grid line visible ---------- */
-.rail, .panel, .chart-card, dialog, .auth-card { border: 1px solid var(--line-strong); border-radius: 0; box-shadow: none; }
-.metrics { border: 1px solid var(--line-strong); border-radius: 0; background: var(--line-strong); gap: 1px; grid-template-columns: 1fr 1fr 1fr 1.3fr; }
-@media (max-width: 700px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.metric { padding: 12px 14px 12px; }
-.metric .num { font-family: var(--serif); font-weight: 700; font-size: clamp(24px, 2.6vw, 32px); }
-.metric .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-.metric:last-child { background: var(--butter-bg); }
+/* ---------- Numbers: level digits, lined up in columns ----------
+   Georgia's digits bob up and down (old-style figures), so every number
+   uses Verdana's level digits instead. */
+.metric .num, .cost-summary .val, .preview .val, .dish-row .pct, .gauge-mark span, td.num, .mono {
+  font-family: Verdana, Geneva, Tahoma, sans-serif; font-variant-numeric: lining-nums tabular-nums;
+}
 
-.simbar { background: var(--tint); border-bottom: 1px solid var(--line-strong); padding-top: 10px; padding-bottom: 12px; }
+/* ---------- Panels: light, quiet edges ---------- */
+#appScreen .rail, #appScreen .panel, #appScreen .chart-card, dialog { border: 1px solid var(--line); border-radius: 8px; box-shadow: none; }
+#appScreen .metrics { border: 1px solid var(--line); border-radius: 8px; background: var(--line); gap: 1px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 700px) { #appScreen .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.metric { padding: 16px 18px; }
+.metric .num { font-weight: 700; font-size: clamp(22px, 2.4vw, 28px); letter-spacing: -0.01em; }
+.metric .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+.simbar { background: var(--tint); border-bottom: 1px solid var(--line); }
 .simfield label { font-size: 11px; }
 
-.rail-head { background: var(--tint); border-bottom: 1px solid var(--line-strong); color: var(--ink); font-family: var(--serif); font-size: 14px; font-style: italic; }
-.dish-row { border-top: 1px solid var(--line); padding: 9px 14px; }
+.rail-head { border-bottom: 1px solid var(--line); color: var(--ink-2); font-family: var(--serif); font-size: 14px; font-style: italic; }
+.dish-row { border-top: 1px solid var(--line); padding: 10px 16px; }
+.dish-row:first-of-type { border-top: none; }
 .dish-row .name { font-family: var(--serif); font-size: 15.5px; }
 .dish-row .cat { font-size: 11px; }
 .dish-row:hover { background: #F6F2E7; }
-.dish-row.selected { background: var(--butter-bg); box-shadow: inset 4px 0 0 var(--over); }
-.dot { border-radius: 0; width: 8px; height: 8px; outline: 1px solid rgba(0, 0, 0, 0.25); }
+.dish-row.selected { background: var(--butter-bg); box-shadow: inset 3px 0 0 var(--green); }
 
-/* Content panel set slightly lower than the list: a deliberate step. */
-main { grid-template-columns: minmax(270px, 330px) 1fr; gap: 0 22px; }
-.panel { margin-top: 20px; padding: 24px 30px 30px 28px; }
-.panel-head { border-bottom: 3px double var(--line-strong); }
-.panel-head h2 { font-size: clamp(28px, 3.4vw, 38px); font-weight: 700; letter-spacing: -0.02em; }
-.status-chip, .qtag, .chip { border-radius: 0; font-family: Verdana, sans-serif; font-size: 11px; border: 1px solid currentColor; }
-.cost-summary .val { font-family: var(--serif); font-size: clamp(26px, 3vw, 34px); }
-.cost-summary { gap: 0; border: 1px solid var(--line); }
-.cost-summary > div { padding: 10px 14px; border-right: 1px solid var(--line); }
-.cost-summary > div:last-child { border-right: none; }
+main { grid-template-columns: minmax(280px, 340px) 1fr; gap: 22px; }
+.panel { padding: 26px 30px 30px; }
+.panel-head { border-bottom: 1px solid var(--line); }
+.panel-head h2 { font-size: clamp(28px, 3.2vw, 36px); font-weight: 700; letter-spacing: -0.015em; }
+.status-chip, .qtag, .chip { border-radius: 4px; font-family: Verdana, sans-serif; font-size: 11px; }
+.cost-summary .val { font-size: clamp(24px, 2.6vw, 30px); font-weight: 700; }
 .section-label { font-size: 16px; font-style: italic; }
 
-/* Tables with all their rules, like a printed almanac. */
-table.ingredients, table.perf, table.edit { border: 1px solid var(--line-strong); }
-table.ingredients th, table.perf th, table.edit th { background: var(--tint); padding: 6px 8px; border: 1px solid var(--line-strong); color: var(--ink); font-size: 11px; }
-table.ingredients td, table.perf td, table.edit td { padding: 7px 8px; border: 1px solid var(--line); }
-table.ingredients tfoot td { border-top: 2px solid var(--ink); background: var(--tint); }
-table.perf tbody tr:nth-child(even) { background: #F7F4EC; }
+/* Tables: row lines only, header underlined. */
+table.ingredients th, table.perf th, table.edit th { color: var(--ink-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line-strong); }
+table.ingredients td, table.perf td, table.edit td { border-bottom: 1px solid var(--line); }
+table.ingredients tfoot td { border-top: 2px solid var(--ink); }
 
-.gauge-track { border-radius: 0; border: 1px solid var(--line-strong); background: var(--surface); }
-.gauge-zone { border-radius: 0; border-width: 0 1px; }
-.gauge-mark { border-radius: 0; width: 6px; margin-left: -3px; height: 26px; margin-top: -13px; border: none; box-shadow: none; }
+.gauge-track { border-radius: 999px; background: #ECE8DE; }
+.gauge-zone { border-radius: 999px; border-width: 1.5px; }
 
-/* Marginal notes: a clipped column, set a touch off-square. */
-.action-box, .callout { border-radius: 0; border: 1px solid var(--line-strong); border-left: 6px double var(--watch-dot); transform: rotate(-0.4deg); }
-.callout { transform: rotate(0.6deg); margin: 0 18px 24px 4px; background: var(--butter-bg); }
+/* Notes: straight, with a colored edge. */
+.action-box, .callout { border: none; border-left: 4px solid var(--watch-dot); border-radius: 0 6px 6px 0; }
+.callout { background: var(--butter-bg); }
 .action-box.ok { border-left-color: var(--good); }
 .action-box .tag, .callout .tag { font-family: var(--serif); font-style: italic; font-size: 15px; font-weight: 700; }
 
-/* ---------- Buttons: raised, square, a little 1999 ---------- */
+/* ---------- Buttons and fields in the app: flat, slightly rounded ---------- */
+#appScreen .applybtn, dialog .applybtn { border-radius: 4px; background: var(--green); font-family: Verdana, sans-serif; font-size: 12.5px; border: none; box-shadow: none; }
+#appScreen .applybtn:hover, dialog .applybtn:hover { background: var(--green-dark); }
+#appScreen .ghostbtn, dialog .ghostbtn { border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); font-size: 12.5px; box-shadow: none; }
+#appScreen .ghostbtn:hover, dialog .ghostbtn:hover { border-color: var(--green); color: var(--green); }
+#appScreen select, #appScreen input, #appScreen textarea, #appScreen .sign-toggle, dialog input { border-radius: 4px !important; border-color: #CFC9BC; font-family: Verdana, sans-serif; }
+header select, header .ghostbtn { border: none !important; }
+.toast { border-radius: 6px; font-family: Verdana, sans-serif; }
+.preview { border-radius: 6px; background: var(--tint); }
+.row-card { border-radius: 6px; background: var(--surface); }
+
+/* The sign-in screens keep their square, raised look. */
+.auth-card { border: 1px solid var(--line-strong); border-radius: 0; box-shadow: none; }
 .applybtn {
   border-radius: 0; background: var(--green); font-family: Verdana, sans-serif; font-size: 12.5px;
   border: 1px solid #0E241A; box-shadow: inset 1px 1px 0 rgba(255,255,255,0.25), 2px 2px 0 var(--ink);
 }
-.applybtn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink); }
-.ghostbtn, .ghostbtn.dark { border-radius: 0; border: 1px solid var(--ink); background: #EFEBE0; font-size: 12.5px; box-shadow: 1px 1px 0 var(--ink); }
-select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel input, .panel select, .panel textarea { border-radius: 0 !important; border-color: var(--line-strong); font-family: Verdana, sans-serif; }
-.toast { border-radius: 0; font-family: Verdana, sans-serif; }
-.preview { border-radius: 0; border: 1px solid var(--line-strong); background: var(--butter-bg); }
-.preview .val { font-family: var(--serif); }
-.row-card { border-radius: 0; background: var(--surface); }
+select, input, textarea { border-radius: 0; border-color: var(--line-strong); font-family: Verdana, sans-serif; }
 
 /* ---------- Sign-in: the kitchen behind a dark green wash ---------- */
 .screen.center { position: relative; isolation: isolate; overflow: hidden; background: #163829; padding-top: 40px; padding-bottom: 40px; }
@@ -132,4 +137,4 @@ select, .num-input, input, textarea, .sign-toggle, .chart-card input, .panel inp
 .auth-card h2 { font-size: 26px; font-style: italic; margin-top: 4px; }
 
 /* ---------- Phones ---------- */
-@media (max-width: 860px) { main { grid-template-columns: 1fr; } .panel { margin-top: 0; } }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }

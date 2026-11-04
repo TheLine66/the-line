@@ -1026,7 +1026,7 @@ function renderLaborSummary() {
 }
 
 function laborAction(L, revenue, pct, t) {
-  const otText = L.ot ? ` <strong>${trimNum(L.ot)} overtime hours</strong> cost ${fmt0(L.otPremium)} extra in time-and-a-half pay; spreading those shifts out would save that.` : "";
+  const otText = L.ot ? ` <strong>${trimNum(L.ot)} overtime hour${L.ot === 1 ? "" : "s"}</strong> cost ${fmt0(L.otPremium)} extra in time-and-a-half pay; spreading those shifts out would save that.` : "";
   if (pct <= t.mid) {
     const where = pct <= t.low ? `under your ${t.low}% target` : `inside your range and under your ${t.mid}% goal`;
     return { ok: !L.ot, text: `Labor is ${fmtPct(pct)} of sales, ${where}.${otText}` };
