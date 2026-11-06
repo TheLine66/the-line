@@ -261,7 +261,7 @@ Open **Specials**, pick **Weekly specials** or **Party or group menu**, fill in 
 
 ## The Line POS (paid add-on)
 
-The register is a **separate app** (its own GitHub repo, `the-line-pos`, and its own Vercel project) that shares this Supabase database. Restaurants with the add-on switched on get a **Pull today's numbers from the POS** button on the MOD Report and **Pull this week from the POS** on Weekly Sales. Everyone else sees a short note about the add-on. Setup steps are in the POS repo's README.
+The register is a **separate app** (its own GitHub repo, `the-line-pos`, and its own Vercel project) that shares this Supabase database. Restaurants with the add-on switched on get MOD Reports that fill in from the POS on their own (when a report opens, or its date, shift or hours change; reports that already have numbers are left alone, and **Pull again from the POS** refreshes them) and **Pull this week from the POS** on Weekly Sales. Everyone else sees a short note about the add-on. Setup steps are in the POS repo's README.
 
 ## Making changes later
 

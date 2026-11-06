@@ -98,6 +98,8 @@ let laborWeek = null;          // week shown on the Labor Costs tab
 let laborRaise = { dept: "all", pct: 0 };  // what-if wage change (not saved)
 let editingReportId = null;    // MOD Report ("new" for a new report)
 let modDraft = null;           // working copy of the report being edited
+let modAutoPull = false;       // pull POS numbers into the report once it's on screen
+let modPosNote = "";           // what the last POS pull did, shown under the button
 let modDirty = false;
 let activePage = "cost";
 let sign = 1;
@@ -1369,6 +1371,8 @@ function setLaborWeek(w) {
 
 // ---------------------------------------------------------- MOD Report
 const SHIFTS = ["Breakfast", "Brunch", "Lunch", "Dinner", "Late night", "All day"];
+// Usual first and last hour for each shift (the last hour is the hour the last tables sit down).
+const SHIFT_HOURS = { Breakfast: [7, 10], Brunch: [10, 14], Lunch: [11, 14], Dinner: [17, 21], "Late night": [21, 25], "All day": [11, 22] };
 const WEATHER = ["Sunny", "Partly cloudy", "Cloudy", "Rain", "Thunderstorms", "Snow / ice", "Fog", "Windy", "Extreme heat", "Extreme cold"];
 const EMP_ISSUES = ["Called out sick", "No call / no show", "Late arrival", "Left early / sent home", "Injury: cut", "Injury: burn",
   "Injury: slip or fall", "Coworker dispute", "Guest complaint about employee", "Conduct / policy issue", "Other"];
@@ -1413,11 +1417,16 @@ function startReport(id) {
     const now = new Date();
     const last = modReports[0];
     modDraft = { id: null, report_date: dayStr(now), shift: now.getHours() < 16 ? "Lunch" : "Dinner", manager: last?.manager || "", data: blankReportData() };
-    if (last?.data?.hours_from !== undefined) { modDraft.data.hours_from = last.data.hours_from; modDraft.data.hours_to = last.data.hours_to; }
+    [modDraft.data.hours_from, modDraft.data.hours_to] = SHIFT_HOURS[modDraft.shift];
+    modAutoPull = true;
   } else {
     const r = modReports.find((x) => x.id === id);
     modDraft = r ? reportFrom(r) : null;
+    // A saved report with no numbers yet gets them from the POS; one that has numbers is left alone.
+    const d = modDraft?.data;
+    modAutoPull = !!d && !d.pos_pulled && !String(d.sales).trim() && !Object.keys(d.hourly || {}).length;
   }
+  modPosNote = "";
   modDirty = false;
   return true;
 }
@@ -1450,6 +1459,7 @@ function renderMod() {
   renderModMetrics();
   renderReportList();
   renderModEditor();
+  if (modAutoPull) { modAutoPull = false; if (posEnabled) pullMod(true); }
 }
 
 function renderModMetrics() {
@@ -1519,7 +1529,7 @@ function renderModEditor() {
       ${input("Net sales ($)", "data.sales", d.sales, `type="number" min="0" step="0.01" placeholder="From the POS"`)}
     </div>
     ${posEnabled
-      ? `<div class="pos-bar"><button class="applybtn" id="pullPosBtn" type="button">Pull today's numbers from the POS</button><span class="note">Fills covers by hour, net sales, comps, voids and discounts for this date and these hours. You can still edit anything before you save.</span></div>`
+      ? `<div class="pos-bar"><button class="applybtn" id="pullPosBtn" type="button">Pull again from the POS</button><span class="note"><span id="posNote">${esc(modPosNote || "Covers by hour, net sales, comps, voids and discounts fill in on their own from the POS for this date and these hours.")}</span> You can still edit anything before you save.</span></div>`
       : `<div class="pos-bar off"><span class="note"><strong>Tired of typing these numbers?</strong> The Line POS add-on fills this report from your register in one tap.</span></div>`}
     <div class="preview" id="modSummary"></div>
 
@@ -1992,16 +2002,28 @@ async function posChecks(fromDate, toDate) {
   return ord.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.id) }));
 }
 
-async function pullMod() {
+// auto = true when the report opened or its date, shift or hours changed:
+// no error toasts, and if there's nothing to pull, any numbers pulled for
+// another date or shift are cleared so they can't be saved by mistake.
+async function pullMod(auto = false) {
   const r = modDraft, d = r.data;
-  if (!r.report_date) { toast("Pick the report's date first.", "err"); return; }
-  const btn = $("pullPosBtn"); btn.disabled = true;
+  if (!r.report_date) { if (!auto) toast("Pick the report's date first.", "err"); return; }
+  const btn = $("pullPosBtn"); if (btn) btn.disabled = true;
+  const note = (msg) => { modPosNote = msg; if ($("posNote")) $("posNote").textContent = msg; };
+  if (auto) note("Checking the POS…");
   try {
     const all = await posChecks(r.report_date, r.report_date);
+    if (modDraft !== r) return;   // they opened a different report while this was loading
     const hourOf = (o) => { const h = new Date(o.opened_at).getHours(); return h < 5 ? h + 24 : h; };   // after midnight counts as late night
     const inShift = all.filter((o) => { const h = hourOf(o); return h >= d.hours_from && h <= d.hours_to; });
     if (!inShift.length) {
-      toast(all.length ? `No POS checks between ${fmtHour(d.hours_from)} and ${fmtHour(d.hours_to + 1)}. Change "First hour" and "Last hour" to match the shift.` : "No POS checks on this date.", "err");
+      const msg = all.length ? `No POS checks between ${fmtHour(d.hours_from)} and ${fmtHour(d.hours_to + 1)}. Change "First hour" and "Last hour" to match the shift.` : "No POS checks on this date yet.";
+      if (auto && d.pos_pulled) {
+        d.hourly = {}; d.sales = ""; d.comps = d.comps.filter((c) => !c.pos); d.pos_pulled = false;
+        modDirty = true; renderModEditor();
+      }
+      note(msg);
+      if (!auto) toast(msg, "err");
       return;
     }
     const paid = inShift.filter((o) => o.status === "paid");
@@ -2022,13 +2044,16 @@ async function pullMod() {
     d.hourly = hourly;
     d.sales = net.toFixed(2);
     d.comps = d.comps.filter((c) => !c.pos).concat(pulled);   // replace earlier pulls, keep anything typed by hand
+    d.pos_pulled = true;
     modDirty = true;
-    renderModEditor();
     const covers = Object.values(hourly).reduce((s, n) => s + n, 0);
     const c = pulled.filter((x) => x.type !== "Discount" && !x.type.startsWith("Void")).length, v = pulled.filter((x) => x.type.startsWith("Void")).length, k = pulled.filter((x) => x.type === "Discount").length;
     const n = (x, word) => `${x} ${word}${x === 1 ? "" : "s"}`;
-    toast(`Pulled ${n(paid.length, "check")}: ${fmt0(net)} net sales, ${n(covers, "cover")}, ${n(c, "comp")}, ${n(v, "void")}, ${n(k, "discount")}. Review, then Save report.`);
-  } catch { /* toast shown */ } finally { if (document.body.contains(btn)) btn.disabled = false; }
+    const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    modPosNote = `Pulled ${n(paid.length, "check")} from the POS at ${time}: ${fmt0(net)} net sales, ${n(covers, "cover")}, ${n(c, "comp")}, ${n(v, "void")}, ${n(k, "discount")}.`;
+    renderModEditor();
+    toast(`${auto ? "Filled in from the POS" : "Pulled again from the POS"}: ${n(paid.length, "check")}, ${fmt0(net)} net sales, ${n(covers, "cover")}. Review, then Save report.`);
+  } catch { if (auto) note("Couldn't reach the POS. Click \"Pull again from the POS\" to try again."); } finally { const b = $("pullPosBtn"); if (b) b.disabled = false; }
 }
 
 async function pullWeekSales() {
@@ -2509,9 +2534,20 @@ function wireControls() {
         modDraft.data.hours_to = Math.max(modDraft.data.hours_to, modDraft.data.hours_from);
         modDirty = true;
         renderModEditor();
+        if (posEnabled) pullMod(true);
+        return;
+      }
+      if (f === "shift" && SHIFT_HOURS[val]) {
+        // A new shift brings its usual hours, then the POS numbers for them.
+        modDraft.shift = val;
+        [modDraft.data.hours_from, modDraft.data.hours_to] = SHIFT_HOURS[val];
+        modDirty = true;
+        renderModEditor();
+        if (posEnabled) pullMod(true);
         return;
       }
       setPath(modDraft, f, val);
+      if (f === "report_date" && posEnabled && val) { modDirty = true; pullMod(true); }
     } else if (t.dataset.row) {
       modDraft.data[t.dataset.row][+t.dataset.i][t.dataset.k] = val;
     } else if (t.dataset.hour !== undefined) {
