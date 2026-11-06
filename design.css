@@ -252,6 +252,11 @@ footer { color: var(--ink-2); }
 .mode-pick button { background: var(--surface); color: var(--ink); border: none; border-left: 1px solid var(--line-strong); font: 600 14px Verdana, Geneva, sans-serif; padding: 9px 16px; cursor: pointer; }
 .mode-pick button:first-child { border-left: none; }
 .mode-pick button[aria-pressed="true"] { background: var(--green); color: #fff; }
+/* The Line POS add-on: pull numbers into the MOD report */
+.pos-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid var(--green); border-radius: 0 6px 6px 0; }
+.pos-bar.off { border-left-color: var(--butter); }
+.pos-bar .note { flex: 1; min-width: 220px; }
+@media print { .pos-bar { display: none !important; } }
 .voice-field { display: flex; gap: 8px; align-items: stretch; }
 .voice-field input { flex: 1; min-width: 0; }
 .mic-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }

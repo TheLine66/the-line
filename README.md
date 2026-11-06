@@ -259,6 +259,10 @@ Open **Specials**, pick **Weekly specials** or **Party or group menu**, fill in 
 - **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.
 - **Always look it over:** the AI can suggest odd pairings, or ingredients you don't stock (the page flags those).
 
+## The Line POS (paid add-on)
+
+The register is a **separate app** (its own GitHub repo, `the-line-pos`, and its own Vercel project) that shares this Supabase database. Restaurants with the add-on switched on get a **Pull today's numbers from the POS** button on the MOD Report and **Pull this week from the POS** on Weekly Sales. Everyone else sees a short note about the add-on. Setup steps are in the POS repo's README.
+
 ## Making changes later
 
 1. Go to your repository on GitHub and click the file you want to change.

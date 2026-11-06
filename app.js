@@ -90,6 +90,7 @@ let staff = [];                // [{id, name, role, department, pay_type, rate, 
 let laborByWeek = new Map();   // "YYYY-MM-DD" -> Map(staffId -> hours)
 let modReports = [];           // newest first: [{id, report_date, shift, manager, data}]
 let extrasReady = true;        // false until supabase/labor-and-mod.sql has been run
+let posEnabled = false;       // this restaurant has The Line POS add-on (and its tables exist)
 let stockReady = true;         // false until supabase/spoilage.sql has been run (on hand + use by)
 let menuMode = "weekly";       // Specials page: "weekly" or "party"
 let lastMenu = null;           // the last menu Gemini wrote (not saved)
@@ -256,6 +257,7 @@ function isMissingTable(err) {
 
 async function loadExtras() {
   const rid = rest.id;
+  posEnabled = false;
   const results = await Promise.all([
     sb.from("staff").select("id,name,role,department,pay_type,rate,active").eq("restaurant_id", rid).order("created_at"),
     sb.from("labor_hours").select("staff_id,week_start,hours").eq("restaurant_id", rid),
@@ -275,6 +277,8 @@ async function loadExtras() {
     if (!laborByWeek.has(h.week_start)) laborByWeek.set(h.week_start, new Map());
     laborByWeek.get(h.week_start).set(h.staff_id, Number(h.hours));
   }
+  const addon = await sb.from("addons").select("pos_enabled").eq("restaurant_id", rid);
+  posEnabled = !addon.error && !!addon.data?.[0]?.pos_enabled;
   modReports = reps.sort((a, b) => b.report_date.localeCompare(a.report_date) || SHIFTS.indexOf(b.shift) - SHIFTS.indexOf(a.shift));
 }
 
@@ -721,6 +725,7 @@ function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
 // ---------------------------------------------------------- Weekly Sales
 function renderSales() {
   $("salesWeek").value = salesWeek;
+  $("salesFromPosBtn").classList.toggle("hidden", !posEnabled || !dishes.length);
   const existing = salesByWeek.get(salesWeek);
   $("salesWeekNote").textContent = existing ? "Saved numbers loaded. Edit and save again to update." : "Nothing saved for this week yet.";
   if (!dishes.length) {
@@ -1370,7 +1375,7 @@ const EMP_ISSUES = ["Called out sick", "No call / no show", "Late arrival", "Lef
 const GUEST_ISSUES = ["Guest injury / accident", "Food: undercooked", "Food: overcooked / wrong temp", "Food: quality or taste",
   "Foreign object in food", "Allergy concern", "Wrong order", "Slow service / long wait", "Staff attitude", "Billing / payment issue", "Other"];
 const COMP_TYPES = ["Comp: VIP / regular", "Comp: kitchen mistake", "Comp: service mistake", "Void: rung in wrong", "Recook",
-  "Refund", "Event", "Buyout", "Employee / manager meal", "Promo / marketing", "Other"];
+  "Refund", "Discount", "Event", "Buyout", "Employee / manager meal", "Promo / marketing", "Other"];
 const CHECKS = [["temps", "Temperature logs done"], ["cleaning", "Cleaning checklist done"], ["deposit", "Cash deposit made"], ["alarm", "Doors locked & alarm set"]];
 const LIST_ROWS = {
   employee: () => ({ dept: "FOH", name: "", type: "", notes: "", action: "" }),
@@ -1513,6 +1518,9 @@ function renderModEditor() {
       ${input("Manager on duty", "manager", r.manager, `maxlength="100" placeholder="Your name" id="modManager"`)}
       ${input("Net sales ($)", "data.sales", d.sales, `type="number" min="0" step="0.01" placeholder="From the POS"`)}
     </div>
+    ${posEnabled
+      ? `<div class="pos-bar"><button class="applybtn" id="pullPosBtn" type="button">Pull today's numbers from the POS</button><span class="note">Fills covers by hour, net sales, comps, voids and discounts for this date and these hours. You can still edit anything before you save.</span></div>`
+      : `<div class="pos-bar off"><span class="note"><strong>Tired of typing these numbers?</strong> The Line POS add-on fills this report from your register in one tap.</span></div>`}
     <div class="preview" id="modSummary"></div>
 
     <div class="mod-section">
@@ -1971,6 +1979,71 @@ function toggleVoice(btn) {
   try { rec.start(); } catch { rec.onend(); }
 }
 
+// ---------------------------------------------------------- From The Line POS (add-on)
+// Reads the register's checks for a date and fills the MOD report or the
+// week's plates sold. The POS lives in its own app; both share this database.
+const POS_COMP_TYPES = { "VIP / regular": "Comp: VIP / regular", "Kitchen mistake": "Comp: kitchen mistake", "Service mistake": "Comp: service mistake",
+  "Employee / manager meal": "Employee / manager meal", "Promo / marketing": "Promo / marketing" };
+
+async function posChecks(fromDate, toDate) {
+  const ord = await run(sb.from("pos_orders").select("*").eq("restaurant_id", rest.id).gte("business_date", fromDate).lte("business_date", toDate));
+  const ids = ord.map((o) => o.id);
+  const items = ids.length ? await run(sb.from("pos_order_items").select("*").in("order_id", ids)) : [];
+  return ord.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.id) }));
+}
+
+async function pullMod() {
+  const r = modDraft, d = r.data;
+  if (!r.report_date) { toast("Pick the report's date first.", "err"); return; }
+  const btn = $("pullPosBtn"); btn.disabled = true;
+  try {
+    const all = await posChecks(r.report_date, r.report_date);
+    const hourOf = (o) => { const h = new Date(o.opened_at).getHours(); return h < 5 ? h + 24 : h; };   // after midnight counts as late night
+    const inShift = all.filter((o) => { const h = hourOf(o); return h >= d.hours_from && h <= d.hours_to; });
+    if (!inShift.length) {
+      toast(all.length ? `No POS checks between ${fmtHour(d.hours_from)} and ${fmtHour(d.hours_to + 1)}. Change "First hour" and "Last hour" to match the shift.` : "No POS checks on this date.", "err");
+      return;
+    }
+    const paid = inShift.filter((o) => o.status === "paid");
+    const hourly = {};
+    for (const o of paid) { const h = hourOf(o); hourly[h] = (Number(hourly[h]) || 0) + (Number(o.guests) || 0); }
+    const net = paid.reduce((s, o) => s + Number(o.subtotal) - Number(o.discount_amount), 0);
+    const pulled = [];
+    for (const o of inShift) {
+      for (const i of o.items.filter((x) => x.status !== "ok")) {
+        pulled.push({ type: i.status === "void" ? "Void: rung in wrong" : POS_COMP_TYPES[i.reason] || "Other", item: i.name,
+          amount: (Number(i.price) * i.qty).toFixed(2), reason: i.reason, approved: i.approved_by, pos: true });
+      }
+      if (Number(o.discount_amount) > 0) {
+        pulled.push({ type: "Discount", item: `Check at ${new Date(o.opened_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}${o.table_label ? `, table ${o.table_label}` : ""}`,
+          amount: Number(o.discount_amount).toFixed(2), reason: o.discount_reason, approved: o.discount_by, pos: true });
+      }
+    }
+    d.hourly = hourly;
+    d.sales = net.toFixed(2);
+    d.comps = d.comps.filter((c) => !c.pos).concat(pulled);   // replace earlier pulls, keep anything typed by hand
+    modDirty = true;
+    renderModEditor();
+    const covers = Object.values(hourly).reduce((s, n) => s + n, 0);
+    const c = pulled.filter((x) => x.type !== "Discount" && !x.type.startsWith("Void")).length, v = pulled.filter((x) => x.type.startsWith("Void")).length, k = pulled.filter((x) => x.type === "Discount").length;
+    const n = (x, word) => `${x} ${word}${x === 1 ? "" : "s"}`;
+    toast(`Pulled ${n(paid.length, "check")}: ${fmt0(net)} net sales, ${n(covers, "cover")}, ${n(c, "comp")}, ${n(v, "void")}, ${n(k, "discount")}. Review, then Save report.`);
+  } catch { /* toast shown */ } finally { if (document.body.contains(btn)) btn.disabled = false; }
+}
+
+async function pullWeekSales() {
+  const btn = $("salesFromPosBtn"); btn.disabled = true;
+  try {
+    const checks = (await posChecks(salesWeek, addDays(salesWeek, 6))).filter((o) => o.status === "paid");
+    if (!checks.length) { toast("No POS sales for this week yet.", "err"); return; }
+    const plates = new Map();
+    for (const o of checks) for (const i of o.items) if (i.status !== "void" && i.dish_id) plates.set(i.dish_id, (plates.get(i.dish_id) || 0) + i.qty);
+    document.querySelectorAll("#salesTable input[data-dish]").forEach((inp) => { inp.value = plates.get(inp.dataset.dish) || 0; });
+    updateSalesTotal();
+    toast(`Filled from ${checks.length} POS checks. Click "Save this week" to keep it.`);
+  } catch { /* toast shown */ } finally { btn.disabled = false; }
+}
+
 // ---------------------------------------------------------- What-if + scenarios
 function resetWhatIf() {
   adjustments = {}; priceMultipliers = {};
@@ -2323,6 +2396,7 @@ function wireControls() {
   $("salesNext").addEventListener("click", () => { salesWeek = addDays(salesWeek, 7); renderSales(); });
   $("salesTable").addEventListener("input", updateSalesTotal);
   $("saveSalesBtn").addEventListener("click", saveSales);
+  $("salesFromPosBtn").addEventListener("click", pullWeekSales);
   $("weeksTable").addEventListener("click", (e) => {
     const b = e.target.closest("[data-open-week]");
     if (b) { salesWeek = b.dataset.openWeek; renderSales(); }
@@ -2453,6 +2527,7 @@ function wireControls() {
     if (!t || !modDraft) return;
     if (t.dataset.add) { modDraft.data[t.dataset.add].push(LIST_ROWS[t.dataset.add]()); modDirty = true; renderModEditor(); }
     else if (t.dataset.delRow) { const [list, i] = t.dataset.delRow.split(":"); modDraft.data[list].splice(+i, 1); modDirty = true; renderModEditor(); }
+    else if (t.id === "pullPosBtn") pullMod();
     else if (t.id === "saveReportBtn") saveReport();
     else if (t.id === "deleteReportBtn") deleteReport();
     else if (t.id === "printReportBtn") window.print();
