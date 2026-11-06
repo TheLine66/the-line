@@ -109,7 +109,16 @@ Rules:
 Theme (always fill in "theme" and "tagline"):
 - Design the printed menu's look to fit the occasion. For a game day or event, use that event's team or event colors (or the colors the owner asks for), give the menu a short rallying title (for example a friendly rivalry slogan), and give every dish a fun themed name that still says what the food is. Keep it good-natured: no insults, no team logos.
 - For a party, fit the occasion. For weekly specials, fit the season and this restaurant.
-- Colors are 6-digit hex codes like #FF8200. Pick a background and a text color that are easy to read together.`;
+- Colors are 6-digit hex codes like #FF8200. Pick a background and a text color that are easy to read together.
+
+Make it personal (this matters most):
+- Use the specific details of THIS occasion, not generic ones. For a sports team: its mascot, nicknames, stadium, traditions, colors and well-known sayings or chants (a few words each, never song lyrics beyond a short phrase). For a birthday: the person's name, age and what they love (a golf-themed 2nd birthday means golf carts, tees, putts, hole-in-one and "par-tee" jokes). For a wedding or anniversary: the couple's names and story.
+- Every dish name and description should connect to those details while still saying what the food is.
+- "sayings": 2 to 4 short phrases to print on the menu (chants, slogans, birthday wishes, toasts).
+- "motifs": 2 to 4 picture names from this list that fit the occasion: football, basketball, baseball, paw, golf_ball, golf_flag, golf_cart, balloon, cake, party_hat, star, trophy, shamrock, pint, heart, rings, pumpkin, snowflake, music, sun, crown, flower, leaf.
+- "emoji": up to 4 emoji that fit (for example ⛳ 🏌️ 🎂 for a golf birthday, 🏈 🍊 for a football game).
+- "pattern": one of checkerboard, stripes, dots, none (checkerboard suits a team with checkerboard end zones or a race; dots suit a kid's party).
+- Never describe or recreate a team's or company's logo artwork.`;
 
 function buildRequest(mode, b) {
   const pantry = b.pantry.slice(0, 250).map((i) => {
@@ -127,6 +136,7 @@ function buildRequest(mode, b) {
     ask = `Plan a party menu for: ${clip(p.type) || "a group"}.
 Guests: ${num(p.guests, 20)}. Budget: about $${num(p.budget, 30)} per person (food only). Service style: ${clip(p.style) || "sit-down"}.
 Make 4 to 6 items across courses (for example: starter, main, side, dessert). Set per_person_price close to the budget.
+Personal details: ${clip(p.personal) || "none given; use the type of group"}
 Notes from the owner: ${clip(p.notes) || "none"}`;
   } else if (mode === "event") {
     const e = b.event || {};
@@ -134,6 +144,7 @@ Notes from the owner: ${clip(p.notes) || "none"}`;
 Colors the owner wants: ${clip(e.colors) || "the event's or teams' usual colors"}.
 Make ${Math.min(8, Math.max(2, num(e.count, 5)))} items guests can order: shareable snacks, a couple of mains, and a drink or dessert idea if it fits. Price them like the regular menu.
 Expected crowd: ${clip(e.crowd) || "busier than usual"}.
+Personal details: ${clip(e.personal) || "none given; use what you know about the event"}
 Notes from the owner: ${clip(e.notes) || "none"}`;
   } else {
     ask = `Plan ${Math.min(6, Math.max(1, num(b.count, 3)))} weekly specials to run alongside the regular menu.
@@ -189,6 +200,10 @@ const SCHEMA = {
     },
     tips: { type: "ARRAY", items: { type: "STRING" }, description: "Up to 3 short practical tips" },
     tagline: { type: "STRING", description: "A short line printed under the title on the menu" },
+    sayings: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 short phrases printed on the menu" },
+    motifs: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 picture names from the allowed list" },
+    emoji: { type: "ARRAY", items: { type: "STRING" }, description: "Up to 4 emoji that fit the occasion" },
+    pattern: { type: "STRING", description: "Border pattern: checkerboard, stripes, dots or none" },
     theme: {
       type: "OBJECT",
       description: "The printed menu's look",

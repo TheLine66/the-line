@@ -307,6 +307,33 @@ footer { color: var(--ink-2); }
 .mp-foot { margin-top: 22px; font-size: 22px; font-weight: 700; color: var(--mp-accent); }
 .mp-details { margin-top: 22px; }
 
+/* Decorations that make each menu personal. */
+.menu-poster { position: relative; overflow: hidden; --mp-pad: clamp(20px, 5vw, 56px); }
+.menu-poster.has-band { border-top: none; }
+.mp-band { height: 22px; margin: -36px calc(-1 * var(--mp-pad)) 26px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.mp-band:last-child { margin: 26px calc(-1 * var(--mp-pad)) -40px; }
+.pat-checkerboard { background: conic-gradient(var(--mp-accent) 25%, var(--mp-bg) 0 50%, var(--mp-accent) 0 75%, var(--mp-bg) 0) 0 0 / 22px 22px; }
+.pat-stripes { background: repeating-linear-gradient(-45deg, var(--mp-accent) 0 10px, var(--mp-bg) 10px 20px); }
+.pat-dots { height: 18px; background: radial-gradient(circle, var(--mp-accent) 0 4px, transparent 4.5px) 0 0 / 18px 18px; }
+.mp-motifs { display: flex; justify-content: center; gap: 16px; margin-bottom: 12px; }
+.mp-motif { width: 46px; height: 46px; fill: currentColor; stroke: currentColor; stroke-width: 0; stroke-linecap: round; stroke-linejoin: round; }
+.mp-motif .c, .mp-motif .c * { fill: var(--mp-bg); stroke: var(--mp-bg); }
+.mp-motif .line { fill: none; stroke: currentColor; }
+.mp-motif [fill="none"] { fill: none; }
+.mp-emoji span { position: absolute; font-size: 34px; line-height: 1; }
+.mp-emoji .e0 { top: 18px; left: 22px; transform: rotate(-12deg); }
+.mp-emoji .e1 { top: 18px; right: 22px; transform: rotate(10deg); }
+.mp-emoji .e2 { bottom: 20px; left: 26px; transform: rotate(8deg); }
+.mp-emoji .e3 { bottom: 20px; right: 26px; transform: rotate(-9deg); }
+.has-band .mp-emoji .e0, .has-band .mp-emoji .e1 { top: 40px; }
+.has-band .mp-emoji .e2, .has-band .mp-emoji .e3 { bottom: 40px; }
+.mp-picture { display: block; max-width: min(60%, 260px); max-height: 130px; margin: 0 auto 14px; object-fit: contain; }
+.mp-sayings { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 0; margin-top: 24px; font: 700 13px Verdana, Geneva, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mp-accent2); }
+.mp-sayings span + span::before { content: "\2605"; margin: 0 12px; color: var(--mp-accent); }
+.pic-btn { cursor: pointer; }
+.pic-note { margin: 0 0 4px; }
+@media (max-width: 560px) { .mp-emoji span { font-size: 24px; } .mp-motif { width: 36px; height: 36px; } }
+
 @media print {
   #page-specials.active .chart-card:not(#menuResult) { display: none !important; }
   #menuResult { border: none !important; padding: 0 !important; }

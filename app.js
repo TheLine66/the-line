@@ -1739,9 +1739,9 @@ function menuRequest() {
     }),
   };
   if (menuMode === "event") {
-    body.event = { name: $("evName").value, colors: $("evColors").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, notes: $("evNotes").value };
+    body.event = { name: $("evName").value, colors: $("evColors").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, personal: $("evPersonal").value, notes: $("evNotes").value };
   } else if (menuMode === "party") {
-    body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, budget: Number($("ptBudget").value) || 30, style: $("ptStyle").value, notes: $("ptNotes").value };
+    body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, budget: Number($("ptBudget").value) || 30, style: $("ptStyle").value, personal: $("ptPersonal").value, notes: $("ptNotes").value };
   } else {
     body.count = Number($("spCount").value) || 3;
     body.notes = $("spNotes").value;
@@ -1770,7 +1770,7 @@ async function makeMenu() {
       return;
     }
     if (!r.ok) { note.textContent = ""; toast(out.error || "Something went wrong. Try again.", "err"); return; }
-    lastMenu = { ...out, request };
+    lastMenu = { ...out, request, picture: lastMenu?.picture };   // keep an added picture across new versions
     note.textContent = "";
     renderMenuResult();
     $("menuResult").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1827,6 +1827,43 @@ function menuTheme(t = {}) {
   return { bg, ink, accent, accent2, style: MENU_FONTS[style] ? style : "classic" };
 }
 
+// Small hand-drawn pictures for the menu card (48×48). "c" parts use the
+// card's background color so they read as cut-outs.
+const MOTIFS = {
+  football: `<ellipse cx="24" cy="24" rx="21" ry="12.5" transform="rotate(-35 24 24)"/><path class="c" d="M17 31 31 17M20 24l4 4M23 21l4 4M26 18l4 4" stroke-width="2.2" fill="none"/>`,
+  basketball: `<circle cx="24" cy="24" r="20"/><path class="c" d="M4 24h40M24 4v40M10 10c8 8 8 20 0 28M38 10c-8 8-8 20 0 28" stroke-width="2" fill="none"/>`,
+  baseball: `<circle cx="24" cy="24" r="20"/><path class="c" d="M12 9c6 8 6 22 0 30M36 9c-6 8-6 22 0 30" stroke-width="2" fill="none" stroke-dasharray="3 2"/>`,
+  paw: `<ellipse cx="24" cy="32" rx="11" ry="9"/><circle cx="11" cy="20" r="4.6"/><circle cx="19" cy="12" r="4.8"/><circle cx="29" cy="12" r="4.8"/><circle cx="37" cy="20" r="4.6"/>`,
+  golf_ball: `<circle cx="24" cy="21" r="16"/><g class="c"><circle cx="18" cy="15" r="1.8"/><circle cx="25" cy="13" r="1.8"/><circle cx="31" cy="18" r="1.8"/><circle cx="19" cy="23" r="1.8"/><circle cx="26" cy="21" r="1.8"/><circle cx="31" cy="27" r="1.8"/><circle cx="23" cy="29" r="1.8"/></g><path d="M20 37h8l-2.5 8h-3z"/>`,
+  golf_flag: `<path d="M15 6h2.6v34H15z"/><path d="M17.6 6 37 12.5 17.6 19z"/><ellipse cx="17" cy="41" rx="13" ry="3.6"/>`,
+  golf_cart: `<path d="M7 9h30v3H7z"/><path d="M10 12h2.5v14H10zM33 12h2.5v14H33z"/><path d="M5 26h34l4 8H5z"/><path d="M38 20h3l-2 6h-3z"/><circle cx="13" cy="36" r="5"/><circle cx="35" cy="36" r="5"/><circle class="c" cx="13" cy="36" r="1.8"/><circle class="c" cx="35" cy="36" r="1.8"/>`,
+  balloon: `<ellipse cx="24" cy="18" rx="12" ry="14"/><path d="M21.5 31.5h5L24 35z"/><path d="M24 35c-3 4 3 6 0 11" stroke-width="1.6" fill="none" class="line"/>`,
+  cake: `<path d="M9 26h30v14H9z"/><path d="M12 18h24v8H12z"/><path class="c" d="M9 31c3 2 5 2 7.5 0s5-2 7.5 0 5 2 7.5 0 5-2 7.5 0" stroke-width="2" fill="none"/><path d="M23 9h2.2v9H23z"/><path d="M24.1 3c2 2.5 2 4.5 0 5.6-2-1.1-2-3.1 0-5.6z"/>`,
+  party_hat: `<path d="M24 4 38 42H10z"/><g class="c"><circle cx="22" cy="20" r="2"/><circle cx="27" cy="29" r="2"/><circle cx="19" cy="34" r="2"/></g><circle cx="24" cy="4" r="3.4"/>`,
+  star: `<path d="M24 4l5.9 12.6 13.8 1.7-10.2 9.4 2.7 13.6L24 34.6 11.8 41.3l2.7-13.6L4.3 18.3l13.8-1.7z"/>`,
+  trophy: `<path d="M14 6h20v10c0 7-4.5 12-10 12s-10-5-10-12z"/><path d="M14 9H7c0 7 3 10 8 10M34 9h7c0 7-3 10-8 10" stroke-width="2.6" fill="none" class="line"/><path d="M21.5 28h5v7h-5zM15 35h18v6H15z"/>`,
+  shamrock: `<circle cx="17" cy="18" r="8"/><circle cx="31" cy="18" r="8"/><circle cx="24" cy="29" r="8"/><path d="M24 30c1 6 3 10 7 14" stroke-width="2.8" fill="none" class="line"/>`,
+  pint: `<path d="M12 8h24l-3 34H15z"/><path class="c" d="M14 15h20" stroke-width="2" fill="none"/><path d="M11 6c3-3 7-2 9 0 2-2 7-3 9 0 2-2 6-2 8 0v4H11z"/>`,
+  heart: `<path d="M24 42 7 25C1 18 5 7 14 7c5 0 8 3 10 6 2-3 5-6 10-6 9 0 13 11 7 18z"/>`,
+  rings: `<circle cx="18" cy="26" r="11" stroke-width="4" fill="none" class="line"/><circle cx="30" cy="26" r="11" stroke-width="4" fill="none" class="line"/><path d="M27 8l3-4 3 4-3 4z"/>`,
+  pumpkin: `<ellipse cx="16" cy="28" rx="9" ry="13"/><ellipse cx="32" cy="28" rx="9" ry="13"/><ellipse cx="24" cy="28" rx="9" ry="14"/><path d="M22.5 8h3v7h-3z"/>`,
+  snowflake: `<path d="M24 4v40M6.7 14l34.6 20M6.7 34l34.6-20M19 8l5 5 5-5M19 40l5-5 5 5" stroke-width="3" fill="none" class="line"/>`,
+  music: `<path d="M18 10 38 5v26" stroke-width="3.4" fill="none" class="line"/><path d="M18 10v26" stroke-width="3.4" fill="none" class="line"/><ellipse cx="13" cy="37" rx="6" ry="4.6"/><ellipse cx="33" cy="32" rx="6" ry="4.6"/>`,
+  sun: `<circle cx="24" cy="24" r="9"/><path d="M24 4v7M24 37v7M4 24h7M37 24h7M10 10l5 5M33 33l5 5M10 38l5-5M33 15l5-5" stroke-width="3" fill="none" class="line"/>`,
+  crown: `<path d="M6 36 9 14l9 9 6-13 6 13 9-9 3 22z"/><path d="M6 38h36v4H6z"/>`,
+  flower: `<circle cx="24" cy="12" r="7"/><circle cx="35" cy="21" r="7"/><circle cx="31" cy="34" r="7"/><circle cx="17" cy="34" r="7"/><circle cx="13" cy="21" r="7"/><circle class="c" cx="24" cy="24" r="5"/>`,
+  leaf: `<path d="M8 40C8 18 22 8 42 6c-2 20-12 34-34 34z"/><path class="c" d="M10 38 34 14" stroke-width="2" fill="none"/>`,
+};
+const PATTERNS = ["checkerboard", "stripes", "dots"];
+function motifSvg(name, color) {
+  return `<svg class="mp-motif" viewBox="0 0 48 48" aria-hidden="true" style="color:${color}">${MOTIFS[name]}</svg>`;
+}
+// Only real emoji, at most four.
+function cleanEmoji(list) {
+  return (Array.isArray(list) ? list : []).map((e) => String(e).trim())
+    .filter((e) => e && e.length <= 8 && /\p{Extended_Pictographic}/u.test(e) && !/[<>&"']/.test(e)).slice(0, 4);
+}
+
 function renderMenuResult() {
   const { menu, mode, model, request } = lastMenu;
   const t = targets();
@@ -1839,7 +1876,16 @@ function renderMenuResult() {
   // 1. The menu guests see, in the theme's colors.
   const th = menuTheme(menu.theme);
   const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : "This week's specials";
-  const poster = `<div class="menu-poster mp-${th.style}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
+  const motifs = (Array.isArray(menu.motifs) ? menu.motifs : []).map((m) => String(m).trim().toLowerCase()).filter((m) => MOTIFS[m]).slice(0, 4);
+  const emoji = cleanEmoji(menu.emoji);
+  const pattern = PATTERNS.includes(String(menu.pattern || "").toLowerCase()) ? String(menu.pattern).toLowerCase() : "none";
+  const sayings = (Array.isArray(menu.sayings) ? menu.sayings : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
+  const band = pattern === "none" ? "" : `<div class="mp-band pat-${pattern}" aria-hidden="true"></div>`;
+  const poster = `<div class="menu-poster mp-${th.style}${pattern === "none" ? "" : " has-band"}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
+      ${band}
+      ${emoji.length ? `<div class="mp-emoji" aria-hidden="true">${emoji.map((e, i) => `<span class="e${i}">${e}</span>`).join("")}</div>` : ""}
+      ${lastMenu.picture ? `<img class="mp-picture" src="${lastMenu.picture}" alt="">` : ""}
+      ${motifs.length ? `<div class="mp-motifs">${motifs.map((m, i) => motifSvg(m, i % 2 ? "var(--mp-accent2)" : "var(--mp-accent)")).join("")}</div>` : ""}
       <div class="mp-kicker">${esc(rest.name)} · ${esc(kicker)}</div>
       <h3 class="mp-title">${esc(menu.title)}</h3>
       ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
@@ -1847,6 +1893,8 @@ function renderMenuResult() {
         <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${!party && Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
         <div class="mp-desc">${esc(it.description)}</div></div>`).join("")}</div>
       ${party && price ? `<div class="mp-foot">${fmt(price)} per guest</div>` : ""}
+      ${sayings.length ? `<div class="mp-sayings">${sayings.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
+      ${band}
     </div>`;
 
   // 2. Behind the numbers: costs checked against real ingredient prices.
@@ -1888,7 +1936,10 @@ function renderMenuResult() {
     <div class="row-actions">
       <button class="applybtn" id="printMenuBtn" type="button">Print the menu</button>
       <button class="ghostbtn dark" id="remakeMenuBtn" type="button">Try another version</button>
+      <label class="ghostbtn dark pic-btn">${lastMenu.picture ? "Change picture" : "Add your own picture"}<input type="file" id="menuPicture" accept="image/*" hidden></label>
+      ${lastMenu.picture ? `<button class="linkbtn" id="removePicture" type="button">Remove picture</button>` : ""}
     </div>
+    <p class="note pic-note">Pictures stay in this browser and are only used on this menu. Only add logos or photos you have permission to use.</p>
     <div class="mp-details">
       <div class="section-label">Behind the numbers</div>
       ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
@@ -2343,7 +2394,17 @@ function wireControls() {
   // Specials
   document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { if (voice) voice.rec.stop(); menuMode = b.dataset.mode; renderSpecials(); }));
   $("makeMenuBtn").addEventListener("click", makeMenu);
+  $("menuResult").addEventListener("change", (e) => {
+    if (e.target.id !== "menuPicture" || !e.target.files[0] || !lastMenu) return;
+    const file = e.target.files[0];
+    if (!/^image\//.test(file.type)) { toast("That file isn't a picture.", "err"); return; }
+    if (file.size > 5 * 1024 * 1024) { toast("Pick a picture under 5 MB.", "err"); return; }
+    const reader = new FileReader();
+    reader.onload = () => { lastMenu.picture = String(reader.result); renderMenuResult(); };
+    reader.readAsDataURL(file);
+  });
   $("menuResult").addEventListener("click", (e) => {
+    if (e.target.closest("#removePicture")) { if (lastMenu) { delete lastMenu.picture; renderMenuResult(); } return; }
     if (e.target.closest("#remakeMenuBtn")) makeMenu();
     else if (e.target.closest("#printMenuBtn")) window.print();
   });
