@@ -1741,7 +1741,7 @@ function menuRequest() {
   if (menuMode === "event") {
     body.event = { name: $("evName").value, colors: $("evColors").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, personal: $("evPersonal").value, notes: $("evNotes").value };
   } else if (menuMode === "party") {
-    body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, budget: Number($("ptBudget").value) || 30, style: $("ptStyle").value, personal: $("ptPersonal").value, notes: $("ptNotes").value };
+    body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, style: $("ptStyle").value, personal: $("ptPersonal").value, notes: $("ptNotes").value };
   } else {
     body.count = Number($("spCount").value) || 3;
     body.notes = $("spNotes").value;
@@ -1863,10 +1863,7 @@ function renderMenuResult() {
   const { menu, mode, model, request } = lastMenu;
   const t = targets();
   const party = mode === "party";
-  const guests = party ? request.party.guests : 0;
   const costed = menu.items.map((it) => ({ it, ...costItem(it) }));
-  const perPerson = costed.reduce((s, c) => s + c.cost, 0);
-  const price = Number(menu.per_person_price) || (party ? request.party.budget : 0);
 
   // 1. The menu guests see, in the theme's colors.
   const th = menuTheme(menu.theme);
@@ -1883,39 +1880,31 @@ function renderMenuResult() {
       <h3 class="mp-title">${esc(menu.title)}</h3>
       ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
       <div class="mp-items">${menu.items.map((it) => `<div class="mp-item">
-        <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${!party && Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
+        <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
         <div class="mp-desc">${esc(it.description)}</div></div>`).join("")}</div>
-      ${party && price ? `<div class="mp-foot">${fmt(price)} per guest</div>` : ""}
       ${sayings.length ? `<div class="mp-sayings">${sayings.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
       ${band}
     </div>`;
 
   // 2. Behind the numbers: costs checked against real ingredient prices.
-  const summary = party ? `
-    <div class="metrics flush">
-      <div class="metric"><div class="num mono">${fmt(price)}</div><div class="label">Price per guest</div></div>
-      <div class="metric"><div class="num mono">${fmt(perPerson)}</div><div class="label">Food cost per guest</div></div>
-      <div class="metric ${price && statusOf((perPerson / price) * 100) === "red" ? "warn" : ""}"><div class="num mono">${price ? fmtPct((perPerson / price) * 100) : "—"}</div><div class="label">Food cost % (goal ${t.mid}%)</div></div>
-      <div class="metric"><div class="num mono">${fmt0(price * guests)}</div><div class="label">Total for ${guests} guests</div></div>
-    </div>` : "";
   const items = costed.map(({ it, cost, lines, missing }) => {
     const p = Number(it.price);
-    const pct = !party && p > 0 ? (cost / p) * 100 : null;
+    const pct = p > 0 ? (cost / p) * 100 : null;
     const st = pct === null ? "" : statusOf(pct);
     const usesSoon = lines.filter((l) => l.d !== null && l.d <= 5).map((l) => `${esc(l.name)} (${l.d < 0 ? "expired" : l.d === 0 ? "today" : `${l.d} day${l.d === 1 ? "" : "s"}`})`);
     return `<article class="special">
       <div class="special-head">
         <div>${party && it.course ? `<div class="special-course">${esc(it.course)}</div>` : ""}<h4>${esc(it.name)}</h4></div>
-        ${!party && p > 0 ? `<div class="special-price mono">${fmt(p)}</div>` : ""}
+        ${p > 0 ? `<div class="special-price mono">${fmt(p)}</div>` : ""}
       </div>
       <div class="special-nums">
-        <div><div class="lbl">Food cost${party ? " per guest" : ""}</div><div class="val mono">${fmt(cost)}</div></div>
+        <div><div class="lbl">Food cost</div><div class="val mono">${fmt(cost)}</div></div>
         ${pct === null ? "" : `<div><div class="lbl">Food cost %</div><div class="val mono ${st === "red" ? "rust" : ""}"><span class="dot ${st}"></span> ${fmtPct(pct)}</div></div>
         <div><div class="lbl">Margin per plate</div><div class="val mono">${fmt(p - cost)}</div></div>`}
       </div>
       ${usesSoon.length ? `<p class="special-uses"><strong>Uses up:</strong> ${usesSoon.join(", ")}</p>` : ""}
       <p class="special-why">${esc(it.why)}</p>
-      <details><summary>Ingredients per ${party ? "guest" : "plate"}</summary>
+      <details><summary>Ingredients per plate</summary>
         <ul>${lines.map((l) => `<li>${esc(l.name)}: ${trimNum(l.amount)} ${esc(l.ing?.unit || "")}${l.ing ? ` (${fmt(l.line)})` : " <em>(not in your ingredient list, not costed)</em>"}</li>`).join("")}</ul>
       </details>
       ${missing.length ? `<p class="special-warn">Needs ${missing.map(esc).join(", ")}, which you don't stock. Add it on the Ingredients tab to cost it.</p>` : ""}
@@ -1936,7 +1925,6 @@ function renderMenuResult() {
     <div class="mp-details">
       <div class="section-label">Behind the numbers</div>
       ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
-      ${summary}
       <div class="specials">${items}</div>
       ${(menu.tips || []).length ? `<div class="section-label">Tips</div><ul class="menu-tips">${menu.tips.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
     </div>`;

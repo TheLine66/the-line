@@ -101,7 +101,7 @@ Rules:
 - Build dishes from the restaurant's own ingredient list. You may also assume basic pantry staples (salt, pepper, cooking oil, flour, sugar, water). Do not invent other ingredients; if a dish truly needs one that isn't listed, put it in the ingredients list with "not_stocked": true.
 - Use up ingredients that are spoiling soon first, especially ones with a lot on hand.
 - Keep each dish's food cost near the restaurant's goal food cost percent. Food cost = the cost of the ingredients in one portion divided by the menu price.
-- Give amounts per ONE portion (per guest for party menus), in the same unit the ingredient list uses.
+- Give amounts per ONE portion, in the same unit the ingredient list uses.
 - Prices should fit this restaurant: look at its current menu prices.
 - Fit the style and cuisine of the restaurant's current menu.
 - "why" is one or two sentences: what it uses up and why it should sell or make money.
@@ -134,8 +134,8 @@ function buildRequest(mode, b) {
   if (mode === "party") {
     const p = b.party || {};
     ask = `Plan a party menu for: ${clip(p.type) || "a group"}.
-Guests: ${num(p.guests, 20)}. Budget: about $${num(p.budget, 30)} per person (food only). Service style: ${clip(p.style) || "sit-down"}.
-Make 4 to 6 items across courses (for example: starter, main, side, dessert). Set per_person_price close to the budget.
+Guests: ${num(p.guests, 20)}. Service style: ${clip(p.style) || "sit-down"}.
+Make 4 to 6 items across courses (for example: starter, main, side, dessert). Give every item its own menu price, priced like the regular menu. Do not set a price per person.
 Personal details: ${clip(p.personal) || "none given; use the type of group"}
 Notes from the owner: ${clip(p.notes) || "none"}`;
   } else if (mode === "event") {
@@ -171,7 +171,6 @@ const SCHEMA = {
   properties: {
     title: { type: "STRING", description: "A short name for this menu" },
     intro: { type: "STRING", description: "One or two plain sentences about the menu" },
-    per_person_price: { type: "NUMBER", description: "Party menus only: price per guest" },
     items: {
       type: "ARRAY",
       items: {
@@ -180,7 +179,7 @@ const SCHEMA = {
           course: { type: "STRING", description: "Starter, main, side, dessert, etc." },
           name: { type: "STRING" },
           description: { type: "STRING", description: "Menu description, one sentence" },
-          price: { type: "NUMBER", description: "Menu price for one portion (weekly specials)" },
+          price: { type: "NUMBER", description: "Menu price for one portion" },
           ingredients: {
             type: "ARRAY",
             items: {
