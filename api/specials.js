@@ -116,8 +116,8 @@ Make it personal (this matters most):
 - Every dish name and description should connect to those details while still saying what the food is.
 - "sayings": 2 to 4 short phrases to print on the menu (chants, slogans, birthday wishes, toasts).
 - "motifs": 2 to 4 picture names from this list that fit the occasion: football, basketball, baseball, paw, golf_ball, golf_flag, golf_cart, balloon, cake, party_hat, star, trophy, shamrock, pint, heart, rings, pumpkin, snowflake, music, sun, crown, flower, leaf.
-- "emoji": up to 4 emoji that fit (for example ⛳ 🏌️ 🎂 for a golf birthday, 🏈 🍊 for a football game).
 - "pattern": one of checkerboard, stripes, dots, none (checkerboard suits a team with checkerboard end zones or a race; dots suit a kid's party).
+- Do not use emoji anywhere.
 - Never describe or recreate a team's or company's logo artwork.`;
 
 function buildRequest(mode, b) {
@@ -202,7 +202,6 @@ const SCHEMA = {
     tagline: { type: "STRING", description: "A short line printed under the title on the menu" },
     sayings: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 short phrases printed on the menu" },
     motifs: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 picture names from the allowed list" },
-    emoji: { type: "ARRAY", items: { type: "STRING" }, description: "Up to 4 emoji that fit the occasion" },
     pattern: { type: "STRING", description: "Border pattern: checkerboard, stripes, dots or none" },
     theme: {
       type: "OBJECT",

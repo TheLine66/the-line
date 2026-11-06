@@ -1858,11 +1858,6 @@ const PATTERNS = ["checkerboard", "stripes", "dots"];
 function motifSvg(name, color) {
   return `<svg class="mp-motif" viewBox="0 0 48 48" aria-hidden="true" style="color:${color}">${MOTIFS[name]}</svg>`;
 }
-// Only real emoji, at most four.
-function cleanEmoji(list) {
-  return (Array.isArray(list) ? list : []).map((e) => String(e).trim())
-    .filter((e) => e && e.length <= 8 && /\p{Extended_Pictographic}/u.test(e) && !/[<>&"']/.test(e)).slice(0, 4);
-}
 
 function renderMenuResult() {
   const { menu, mode, model, request } = lastMenu;
@@ -1877,13 +1872,11 @@ function renderMenuResult() {
   const th = menuTheme(menu.theme);
   const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : "This week's specials";
   const motifs = (Array.isArray(menu.motifs) ? menu.motifs : []).map((m) => String(m).trim().toLowerCase()).filter((m) => MOTIFS[m]).slice(0, 4);
-  const emoji = cleanEmoji(menu.emoji);
   const pattern = PATTERNS.includes(String(menu.pattern || "").toLowerCase()) ? String(menu.pattern).toLowerCase() : "none";
   const sayings = (Array.isArray(menu.sayings) ? menu.sayings : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   const band = pattern === "none" ? "" : `<div class="mp-band pat-${pattern}" aria-hidden="true"></div>`;
   const poster = `<div class="menu-poster mp-${th.style}${pattern === "none" ? "" : " has-band"}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
       ${band}
-      ${emoji.length ? `<div class="mp-emoji" aria-hidden="true">${emoji.map((e, i) => `<span class="e${i}">${e}</span>`).join("")}</div>` : ""}
       ${lastMenu.picture ? `<img class="mp-picture" src="${lastMenu.picture}" alt="">` : ""}
       ${motifs.length ? `<div class="mp-motifs">${motifs.map((m, i) => motifSvg(m, i % 2 ? "var(--mp-accent2)" : "var(--mp-accent)")).join("")}</div>` : ""}
       <div class="mp-kicker">${esc(rest.name)} · ${esc(kicker)}</div>

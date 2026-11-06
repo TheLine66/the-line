@@ -320,19 +320,12 @@ footer { color: var(--ink-2); }
 .mp-motif .c, .mp-motif .c * { fill: var(--mp-bg); stroke: var(--mp-bg); }
 .mp-motif .line { fill: none; stroke: currentColor; }
 .mp-motif [fill="none"] { fill: none; }
-.mp-emoji span { position: absolute; font-size: 34px; line-height: 1; }
-.mp-emoji .e0 { top: 18px; left: 22px; transform: rotate(-12deg); }
-.mp-emoji .e1 { top: 18px; right: 22px; transform: rotate(10deg); }
-.mp-emoji .e2 { bottom: 20px; left: 26px; transform: rotate(8deg); }
-.mp-emoji .e3 { bottom: 20px; right: 26px; transform: rotate(-9deg); }
-.has-band .mp-emoji .e0, .has-band .mp-emoji .e1 { top: 40px; }
-.has-band .mp-emoji .e2, .has-band .mp-emoji .e3 { bottom: 40px; }
-.mp-picture { display: block; max-width: min(60%, 260px); max-height: 130px; margin: 0 auto 14px; object-fit: contain; }
+.mp-picture { display: block; max-width: min(80%, 360px); max-height: 220px; margin: 0 auto 16px; object-fit: contain; border-radius: 6px; }
 .mp-sayings { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 0; margin-top: 24px; font: 700 13px Verdana, Geneva, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mp-accent2); }
 .mp-sayings span + span::before { content: "\2605"; margin: 0 12px; color: var(--mp-accent); }
 .pic-btn { cursor: pointer; }
 .pic-note { margin: 0 0 4px; }
-@media (max-width: 560px) { .mp-emoji span { font-size: 24px; } .mp-motif { width: 36px; height: 36px; } }
+@media (max-width: 560px) { .mp-motif { width: 36px; height: 36px; } }
 
 @media print {
   #page-specials.active .chart-card:not(#menuResult) { display: none !important; }
