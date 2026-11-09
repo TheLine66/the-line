@@ -11,7 +11,30 @@ const cfg = window.APP_CONFIG || {};
 
 // ---------------------------------------------------------------- utils
 const SCREENS = ["boot", "setupNeeded", "authScreen", "onboardScreen", "appScreen"];
-function show(id) { SCREENS.forEach((s) => $(s).classList.toggle("hidden", s !== id)); }
+function show(id) {
+  SCREENS.forEach((s) => $(s).classList.toggle("hidden", s !== id));
+  if (id === "authScreen") playLogoSplice($("authLogo"));
+}
+
+// Sign-in logo: start it whole ("TheLine"), then let the CSS transitions in
+// styles.css cut it and open the space between the words.
+function playLogoSplice(wm) {
+  if (!wm || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  // Measure a space in this font so the words close up exactly.
+  const probe = document.createElement("i");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;word-spacing:0;font:inherit";
+  wm.appendChild(probe);
+  probe.textContent = "The Line"; const wide = probe.getBoundingClientRect().width;
+  probe.textContent = "TheLine";  const tight = probe.getBoundingClientRect().width;
+  probe.remove();
+  const size = parseFloat(getComputedStyle(wm).fontSize);
+  if (size && wide > tight) wm.style.setProperty("--sp", ((wide - tight) / size).toFixed(4) + "em");
+  wm.classList.add("no-anim", "is-whole");
+  wm.classList.remove("is-cutting");
+  void wm.offsetWidth;                      // lock in the "whole" look before animating
+  wm.classList.remove("no-anim", "is-whole");
+  wm.classList.add("is-cutting");
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

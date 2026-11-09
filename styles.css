@@ -70,12 +70,40 @@ button, input, select { font-family: inherit; }
 .wordmark {
   --cut: 0.57em;     /* where the word is sliced                                */
   --shift: 0.07em;   /* how far the bottom half slides to the right             */
+  --gap: 0.05em;     /* the blank stripe between the two halves                 */
   position: relative; display: inline-block; margin: 0;
   font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700; line-height: 1.05; white-space: nowrap;
 }
 .wordmark span { display: block; }
 .wm-top { clip-path: inset(0 0 calc(100% - var(--cut)) 0); }
-.wm-bot { position: absolute; left: 0; top: 0; clip-path: inset(calc(var(--cut) + 0.05em) 0 0 0); transform: translateX(var(--shift)); }
+.wm-bot { position: absolute; left: 0; top: 0; clip-path: inset(calc(var(--cut) + var(--gap)) 0 0 0); transform: translateX(var(--shift)); }
+
+/* ---------- Sign-in logo animation: a gold blade slices "TheLine", the halves
+   split and the words spread apart. Started by playLogoSplice() in app.js.
+   It ends on exactly the still logo above. ---------- */
+.wordmark.splice { --sp: 0.25em; /* width of a space; app.js measures it */
+  transition: word-spacing 700ms cubic-bezier(.2,.8,.2,1) 420ms; }
+.wordmark.splice .wm-bot { transition: clip-path 450ms ease-out 380ms, transform 650ms cubic-bezier(.2,.8,.2,1) 420ms; }
+.wordmark .wm-blade {
+  position: absolute; left: -0.08em; right: -0.08em; height: 0.03em;
+  top: calc(var(--cut) + var(--gap) / 2 - 0.015em);
+  background: #B8902C; border-radius: 1px;
+  transform: scaleX(0); transform-origin: left center; pointer-events: none;
+}
+.wordmark.is-whole { word-spacing: calc(-1 * var(--sp)); }                  /* before the cut */
+.wordmark.is-whole .wm-bot { clip-path: inset(var(--cut) 0 0 0); transform: none; }
+.wordmark.no-anim, .wordmark.no-anim .wm-bot { transition: none; }
+.wordmark.is-cutting .wm-blade { animation: wm-blade 1000ms cubic-bezier(.6,0,.2,1) forwards; }
+@keyframes wm-blade {
+  0%   { transform: scaleX(0); transform-origin: left center; }
+  45%  { transform: scaleX(1); transform-origin: left center; }
+  46%  { transform-origin: right center; }
+  100% { transform: scaleX(0); transform-origin: right center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wordmark.splice, .wordmark.splice .wm-bot { transition: none; }
+  .wordmark .wm-blade { display: none; }
+}
 .stage { display: flex; flex-direction: column; align-items: center; gap: 26px; width: 100%; max-width: 420px; }
 .stage-brand { text-align: center; }
 .stage .wordmark { font-size: clamp(52px, 11vw, 92px); }
