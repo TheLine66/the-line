@@ -371,5 +371,105 @@ html[data-theme="dark"] table.perf tbody tr:hover, html[data-theme="dark"] table
 html[data-theme="dark"] .gauge-mark { border-color: var(--surface); }
 html[data-theme="dark"] .sign-toggle button { background: var(--surface); color: var(--ink-2); }
 
+/* ---------- Tonight: order tickets hanging from a gold rail (renderHome in app.js) ----------
+   Tickets stay paper-colored in dark mode, like real printer tickets. */
+.tonight {
+  --ticket: #FFFDF7; --t-ink: #262624; --t-rule: #D8D1C0; --t-soft: #F3EBD3; --clip: #3B3A36;
+  --t-good: #2F6B3E; --t-watch: #86621A; --t-over: #A3341F; --t-link: #1F4D3A; --t-shadow: rgba(38,38,36,.16);
+  --t-mono: 'Courier New', Courier, ui-monospace, monospace;
+  padding: 22px clamp(16px, 4vw, 40px) 40px;
+}
+html[data-theme="dark"] .tonight { --ticket: #ECE6D8; --t-rule: #CFC6B2; --t-soft: #E2D6B4; --clip: #0C100E; --t-shadow: rgba(0,0,0,.55); }
+.tn-title h2 { margin: 0; font-family: var(--serif); font-style: italic; font-size: clamp(32px, 5vw, 44px); line-height: 1.05; }
+.tn-when { margin-top: 4px; font-family: var(--t-mono); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+.tn-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin: 28px 0 4px; }
+.tn-head h3 { margin: 0; font-family: var(--serif); font-size: 21px; }
+.tn-head .hint { font-family: var(--serif); font-style: italic; font-size: 14px; }
+
+.tn-scroller { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scroll-padding-inline-start: 6px; padding-bottom: 26px; scrollbar-width: thin; }
+.tonight.entering .tn-scroller { overflow-x: hidden; scroll-snap-type: none; }   /* arriving tickets don't make the rail scroll */
+.tn-track { position: relative; display: flex; gap: 22px; width: max-content; min-width: 100%; padding: 4px 6px 0; }
+.tn-track::before {   /* the gold rail */
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 5px; border-radius: 3px;
+  background: var(--butter); box-shadow: 0 2px 0 var(--t-shadow); transform-origin: left center;
+}
+.tonight.play .tn-track::before { animation: tn-rail .7s cubic-bezier(.6,0,.2,1) both; }
+@keyframes tn-rail { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.ticket {
+  position: relative; flex: 0 0 min(258px, 78vw); margin-top: 14px; scroll-snap-align: start;
+  background: var(--ticket); color: var(--t-ink); padding: 16px 16px 18px; cursor: pointer;
+  box-shadow: 0 6px 16px var(--t-shadow); transform-origin: 50% -14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ticket::before {   /* the clip holding it on the rail */
+  content: ""; position: absolute; top: -18px; left: 50%; width: 36px; height: 20px; transform: translateX(-50%);
+  background: var(--clip); border-radius: 3px 3px 5px 5px;
+}
+.ticket::after {    /* torn bottom edge */
+  content: ""; position: absolute; left: 0; right: 0; bottom: -7px; height: 7px;
+  background: radial-gradient(circle at 7px 0, var(--ticket) 6px, transparent 6.5px) 0 0 / 14px 7px repeat-x;
+}
+.ticket .t-meta { display: flex; justify-content: space-between; font-family: var(--t-mono); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px dashed var(--t-rule); padding-bottom: 8px; }
+.ticket h4 { margin: 0; font-family: var(--serif); font-size: 18px; line-height: 1.2; color: var(--t-ink); }
+.ticket .t-big { font-family: var(--serif); font-size: 15px; line-height: 1.3; }
+.ticket .t-big .n { font-family: Verdana, Geneva, sans-serif; font-weight: 700; font-size: 30px; font-variant-numeric: lining-nums tabular-nums; letter-spacing: -.01em; margin-right: 2px; }
+.ticket .n.over { color: var(--t-over); }
+.ticket .n.good { color: var(--t-good); }
+.ticket .t-sub { font-size: 12px; line-height: 1.5; }
+.ticket .t-sub .up { color: var(--t-good); font-weight: 700; }
+.ticket .t-sub .down { color: var(--t-over); font-weight: 700; }
+.ticket .t-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-family: var(--t-mono); font-size: 13px; }
+.ticket .t-lines li { display: flex; justify-content: space-between; gap: 10px; }
+.ticket .t-lines li span { min-width: 0; overflow-wrap: anywhere; }
+.ticket .t-lines b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ticket .t-lines .over { color: var(--t-over); } .ticket .t-lines .watch { color: var(--t-watch); } .ticket .t-lines .good { color: var(--t-good); }
+.ticket .t-body { margin: 0; font-size: 12.5px; line-height: 1.55; }
+.ticket .t-notes { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; }
+.ticket .t-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 8px; border-top: 1px dashed var(--t-rule); }
+.ticket .t-link { background: none; border: none; padding: 4px 0; color: var(--t-link); font: 12px Verdana, Geneva, sans-serif; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.ticket .t-done { background: var(--t-ink); color: var(--ticket); border: none; font: 700 11.5px var(--t-mono); letter-spacing: .06em; text-transform: uppercase; padding: 7px 12px; cursor: pointer; }
+.ticket button:focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
+.t-gauge { position: relative; height: 10px; background: var(--t-rule); margin: 2px 0 14px; }
+.t-gauge .zone { position: absolute; top: 0; bottom: 0; background: var(--t-soft); outline: 1px solid var(--t-good); }
+.t-gauge .mark { position: absolute; top: -4px; width: 3px; height: 18px; background: var(--t-ink); transform: translateX(-50%); }
+.t-gauge .lbl { position: absolute; top: 14px; font-family: var(--t-mono); font-size: 10.5px; transform: translateX(-50%); white-space: nowrap; }
+.t-clear { flex: 1 0 min(258px, 78vw); margin-top: 26px; padding: 18px 4px; font-family: var(--serif); font-size: 16px; display: flex; flex-direction: column; gap: 6px; }
+.t-clear em { font-size: 20px; }
+
+/* Motion: slide in along the rail, swing on the clip, settle. Tap: swing. Done: drop off the rail. */
+.tonight.play .ticket { animation: tn-slide 1.05s cubic-bezier(.2,.75,.25,1) both; animation-delay: calc(.55s + var(--i) * .14s); }
+@keyframes tn-slide {
+  0%   { transform: translateX(110vw) rotate(0deg); }
+  52%  { transform: translateX(-6px) rotate(0deg); }
+  64%  { transform: translateX(0) rotate(-7deg); }
+  76%  { transform: translateX(0) rotate(4deg); }
+  87%  { transform: translateX(0) rotate(-2deg); }
+  94%  { transform: translateX(0) rotate(.8deg); }
+  100% { transform: translateX(0) rotate(0deg); }
+}
+.tonight .ticket.swing { animation: tn-swing .95s ease-out; }
+@keyframes tn-swing {
+  0% { transform: rotate(0); } 18% { transform: rotate(8deg); } 38% { transform: rotate(-5.5deg); }
+  58% { transform: rotate(3deg); } 76% { transform: rotate(-1.2deg); } 100% { transform: rotate(0); }
+}
+.tonight .ticket.spiked { animation: tn-drop .6s cubic-bezier(.5,0,.75,0) forwards; pointer-events: none; }
+@keyframes tn-drop {
+  0%   { transform: translateY(0) rotate(0); opacity: 1; }
+  25%  { transform: translateY(-10px) rotate(-6deg); opacity: 1; }
+  100% { transform: translateY(220px) rotate(24deg); opacity: 0; }
+}
+.tonight.play .t-clear { animation: tn-fade .5s ease-out both; }
+@keyframes tn-fade { from { transform: translateY(8px); opacity: 0; } }
+
+/* The logo in the header opens Tonight */
+.brand { position: relative; }
+.brand-home { position: absolute; inset: -4px; z-index: 1; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.brand-home:focus-visible { outline: 2px solid var(--butter); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tonight.play .tn-track::before, .tonight.play .ticket, .tonight .ticket.swing, .tonight .ticket.spiked, .tonight.play .t-clear { animation: none; }
+}
+
 /* ---------- Phones ---------- */
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }

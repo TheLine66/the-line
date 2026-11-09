@@ -104,6 +104,7 @@
   <header>
     <div class="header-top">
       <div class="brand">
+        <button class="brand-home" id="brandHome" type="button" aria-label="Go to Tonight"></button>
         <span class="brand-mark"></span>
         <div>
           <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
@@ -189,6 +190,9 @@
   </div>
 
   <!-- Cost Tracker -->
+  <!-- Tonight: opens when no tabs are pinned, or from the logo. Built by renderHome() in app.js. -->
+  <div class="page" id="page-home"><div class="tonight" id="tonight"></div></div>
+
   <div class="page active" id="page-cost">
     <div class="metrics" id="metrics"></div>
     <main>

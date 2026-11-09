@@ -279,6 +279,7 @@ async function selectRestaurant(id) {
   lastMenu = null;
   await loadRestaurantData();
   renderRestaurantSelect();
+  if (!pinnedTabs().length) activePage = "home";     // nothing pinned: open on Tonight
   show("appScreen");
   render();
 }
@@ -472,7 +473,7 @@ function computeAll() {
 }
 
 // ================================================================ RENDER
-const PAGE_NAMES = { cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
+const PAGE_NAMES = { home: "Tonight", cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
   recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
 
 // Which pages show as tabs in the row under the logo. Saved in this
@@ -523,6 +524,7 @@ function render() {
   renderScenarioSelect();
   renderActiveAdj();
   if (activePage === "cost") { renderMetrics(); renderDishList(); renderPanel(); }
+  else if (activePage === "home") renderHome();
   else if (activePage === "perf") renderPerf();
   else if (activePage === "sales") renderSales();
   else if (activePage === "ingredients") renderIngredients();
@@ -813,6 +815,216 @@ function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
     <thead><tr><th>Dish</th><th class="num">Units/wk</th><th class="num">Price</th><th class="num">Food cost %</th>
       <th class="num">Margin/plate</th><th class="num">Weekly margin $</th><th class="num">% of total margin</th><th class="num">Type</th></tr></thead>
     <tbody>${body}</tbody>`;
+}
+
+// ---------------------------------------------------------- Tonight
+// The home page: what needs the manager tonight ("On the pass") and how the
+// week is going, as order tickets hanging from a gold rail. Uses real costs
+// (what-if price changes are ignored here). Tickets marked Done stay done
+// for the rest of the day in this browser.
+function realCost(d) { return d.items.reduce((s, it) => s + (ingredients.get(it.ingredient_id)?.cost || 0) * it.qty, 0); }
+const doneKey = () => `line.done.${rest?.id}.${dayStr(new Date())}`;
+function doneToday() { try { return new Set(JSON.parse(safeGet(doneKey()) || "[]")); } catch { return new Set(); } }
+function markDone(kind) { const s = doneToday(); s.add(kind); safeSet(doneKey(), JSON.stringify([...s])); }
+
+let tonightTimers = [];
+const tnFmt = (v, dec = 0, pre = "", suf = "") => pre + Number(v).toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec }) + suf;
+const tnNum = (v, o = {}) => `<span class="n ${o.cls || ""}" data-to="${v}" data-dec="${o.dec || 0}" data-pre="${o.pre || ""}" data-suf="${o.suf || ""}">${tnFmt(v, o.dec || 0, o.pre, o.suf)}</span>`;
+const tnLines = (rows) => `<ul class="t-lines">${rows.map(([a, b, c]) => `<li><span>${esc(a)}</span><b class="${c || ""}">${esc(b)}</b></li>`).join("")}</ul>`;
+const plural = (n, one, many) => (n === 1 ? one : many);
+
+function passTickets(t, week) {
+  const out = [];
+  const rows = dishes.map((d) => {
+    const cost = realCost(d), pct = d.price ? (cost / d.price) * 100 : 0;
+    const units = week ? (salesByWeek.get(week)?.get(d.id) || 0) : 0;
+    return { d, cost, pct, st: statusOf(pct), units, margin: (d.price - cost) * units };
+  });
+
+  // 1. Dishes over target
+  const flagged = rows.filter((r) => r.st !== "green").sort((a, b) => b.pct - a.pct);
+  if (flagged.length) {
+    const red = flagged.filter((r) => r.st === "red").length;
+    out.push({ kind: "over", title: "Over target", goto: "cost", link: "Open Cost Tracker",
+      body: `<div class="t-big">${red ? `${tnNum(red, { cls: "over" })} ${plural(red, "dish", "dishes")} in the red` : `${tnNum(flagged.length)} trending high`}</div>` +
+        tnLines(flagged.slice(0, 3).map((r) => [r.d.name, fmtPct(r.pct), r.st === "red" ? "over" : "watch"])) +
+        `<div class="t-sub">Your target is ${t.low}–${t.high}% food cost.</div>` });
+  }
+
+  // 2. Ingredients about to expire
+  if (stockReady) {
+    const soon = [...ingredients.values()]
+      .filter((i) => i.use_by && daysLeft(i.use_by) <= 2 && (i.on_hand == null || i.on_hand > 0))
+      .sort((a, b) => daysLeft(a.use_by) - daysLeft(b.use_by));
+    if (soon.length) {
+      const when = (n) => (n < 0 ? "expired" : n === 0 ? "today" : n === 1 ? "tmrw" : `${n} days`);
+      out.push({ kind: "useby", title: "Use it or lose it", goto: "specials", link: "Make a specials menu",
+        body: `<div class="t-big">${tnNum(soon.length)} ${plural(soon.length, "item expires", "items expire")} within 2 days</div>` +
+          tnLines(soon.slice(0, 4).map((i) => { const n = daysLeft(i.use_by);
+            return [i.name, (i.on_hand != null ? `${trimNum(i.on_hand)} ${i.unit} · ` : "") + when(n), n <= 0 ? "over" : "watch"]; })) });
+    }
+  }
+
+  // 3. The biggest earner that's over target
+  const byMargin = rows.filter((r) => r.units > 0).sort((a, b) => b.margin - a.margin);
+  const top = byMargin.find((r) => r.st !== "green");
+  if (top) {
+    const rank = byMargin.indexOf(top) + 1;
+    const fix = top.pct > t.high
+      ? `It runs ${(top.pct - t.high).toFixed(1)} points over your ${t.high}% limit. At $${Math.ceil(top.cost / (t.high / 100))} instead of ${fmt(top.d.price)} it drops back under.`
+      : `It sits ${(top.pct - t.low).toFixed(1)} points above your ${t.low}% comfort line.`;
+    out.push({ kind: "earner", title: "Biggest earner, over target", goto: "perf", link: "Open Performance",
+      body: `<div class="t-big">${tnNum(Math.round(top.margin), { pre: "$" })} margin</div>` +
+        `<p class="t-body"><b>${esc(top.d.name)}</b> is #${rank} on the menu for weekly margin, from ${top.units} plates. ${fix}</p>` });
+  }
+  return out;
+}
+
+function weekTickets(t, week) {
+  const out = [];
+  // Sales
+  if (week) {
+    const weeks = sortedWeeks(), prev = weeks[weeks.indexOf(week) + 1];
+    const m = salesByWeek.get(week);
+    const revenue = salesForWeek(week).revenue, before = prev ? salesForWeek(prev).revenue : 0;
+    let plates = 0, best = null;
+    for (const d of dishes) { const u = m?.get(d.id) || 0; plates += u; if (u && (!best || u > best.u)) best = { d, u }; }
+    const change = before ? ((revenue - before) / before) * 100 : null;
+    out.push({ kind: "sales", title: "Sales", goto: "sales", link: "Open Weekly Sales",
+      body: `<div class="t-big">${tnNum(Math.round(revenue), { pre: "$" })}</div>` +
+        (change !== null ? `<div class="t-sub"><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "▲" : "▼"} ${Math.abs(change).toFixed(1)}%</span> vs. last week (${fmt0(before)})</div>` : "") +
+        tnLines([["Plates sold", plates.toLocaleString()], ...(best ? [["Top seller", best.d.name]] : [])]) });
+  } else {
+    out.push({ kind: "sales", title: "Sales", goto: "sales", link: "Enter this week's sales",
+      body: `<p class="t-body">No sales entered yet. Add a week's plates sold to see revenue, margins and your best sellers here.</p>` });
+  }
+  // Food cost
+  if (dishes.length) {
+    const pcts = dishes.map((d) => (d.price ? (realCost(d) / d.price) * 100 : 0));
+    const avg = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+    const red = pcts.filter((p) => statusOf(p) === "red").length, ok = pcts.filter((p) => statusOf(p) === "green").length;
+    const lo = Math.min(t.low - 8, avg - 2), hi = Math.max(t.high + 10, avg + 2), at = (v) => ((v - lo) / (hi - lo)) * 100;
+    out.push({ kind: "food", title: "Food cost", goto: "cost", link: "Open Cost Tracker",
+      body: `<div class="t-big">${tnNum(avg, { dec: 1, suf: "%", cls: statusOf(avg) === "red" ? "over" : statusOf(avg) === "green" ? "good" : "" })} menu average</div>` +
+        `<div class="t-gauge" role="img" aria-label="Average food cost ${fmtPct(avg)}, target ${t.low} to ${t.high} percent">
+           <span class="zone" style="left:${at(t.low)}%;width:${at(t.high) - at(t.low)}%"></span><span class="mark" style="left:${at(avg)}%"></span>
+           <span class="lbl" style="left:${at(t.low)}%">${t.low}%</span><span class="lbl" style="left:${at(t.high)}%">${t.high}%</span></div>` +
+        tnLines([["Dishes in the red", `${red} of ${dishes.length}`, red ? "over" : ""], ["On target", `${ok} of ${dishes.length}`, "good"]]) });
+  }
+  // Labor
+  if (extrasReady && week && laborByWeek.has(week)) {
+    const lt = laborTotals(laborByWeek.get(week)), revenue = salesForWeek(week).revenue;
+    out.push({ kind: "labor", title: "Labor", goto: "labor", link: "Open Labor Costs",
+      body: `<div class="t-big">${revenue ? `${tnNum(lt.total / revenue * 100, { dec: 1, suf: "%" })} of sales` : tnNum(Math.round(lt.total), { pre: "$" })}</div>` +
+        tnLines([["Labor cost", fmt0(lt.total)], ["Hours", String(Math.round(lt.hours))], ["Overtime", `${trimNum(lt.ot)} hrs`, lt.ot ? "watch" : ""]]) });
+  }
+  // Last MOD report
+  const r = extrasReady && modReports[0];
+  if (r) {
+    const d = reportFrom(r).data, s = reportStats(d);
+    const notes = String(d.followups || "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 2);
+    out.push({ kind: "mod", title: "Last MOD report", goto: "mod", link: "Open MOD Report",
+      body: `<div class="t-big">${s.covers ? `${tnNum(s.covers)} covers` : esc(r.shift || "Report")}</div>` +
+        tnLines([["Shift", `${fmtReportDay(r.report_date).replace(/, \d{4}$/, "")} · ${r.shift || ""}`],
+          ...(r.manager ? [["Manager", r.manager]] : []), ...(d.weather ? [["Weather", d.weather + (d.temp ? `, ${d.temp}°` : "")]] : []),
+          ...(s.comps ? [["Comps", fmt0(s.comps)]] : [])]) +
+        (notes.length ? `<ol class="t-notes">${notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "") });
+  }
+  return out;
+}
+
+function tonightTicket(tk, i, no, time, canDone) {
+  return `<article class="ticket" style="--i:${i}" data-kind="${tk.kind}">
+      <div class="t-meta"><span>No. ${String(no).padStart(2, "0")}</span><span>${time}</span></div>
+      <h4>${tk.title}</h4>
+      ${tk.body}
+      <div class="t-actions"><button class="t-link" type="button" data-goto="${tk.goto}">${tk.link}</button>${canDone ? `<button class="t-done" type="button">Done</button>` : ""}</div>
+    </article>`;
+}
+
+const PASS_CLEAR = `<div class="t-clear"><em>The pass is clear.</em>Nothing needs you right now.</div>`;
+
+function renderHome() {
+  const el = $("tonight"), t = targets(), week = selectedWeek;
+  const now = new Date(), time = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const done = doneToday();
+  const pass = passTickets(t, week).filter((tk) => !done.has(tk.kind));
+  const wk = weekTickets(t, week);
+  el.innerHTML = `
+    <div class="tn-title">
+      <h2>Tonight</h2>
+      <div class="tn-when">${now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · ${esc(rest.name)}</div>
+    </div>
+    <section>
+      <div class="tn-head"><h3>On the pass</h3><span class="hint">Needs you tonight · tap a ticket, or mark it done</span></div>
+      <div class="tn-scroller"><div class="tn-track" id="tnPass">${pass.length ? pass.map((tk, i) => tonightTicket(tk, i, i + 1, time, true)).join("") : PASS_CLEAR}</div></div>
+    </section>
+    <section>
+      <div class="tn-head"><h3>This week</h3><span class="hint">${week ? fmtWeek(week) : "No sales entered yet"}</span></div>
+      <div class="tn-scroller"><div class="tn-track">${wk.map((tk, i) => tonightTicket(tk, i + 1, pass.length + i + 1, time, false)).join("")}</div></div>
+    </section>`;
+  playTonight(el);
+}
+
+// Entrance: the rail draws, each ticket slides in along it, swings on its clip
+// and settles; its numbers count up as it lands.
+function playTonight(el) {
+  tonightTimers.forEach(clearTimeout); tonightTimers = [];
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  el.classList.remove("play", "entering"); void el.offsetWidth; el.classList.add("play", "entering");
+  el.querySelectorAll(".ticket").forEach((tk) => {
+    const i = Number(tk.style.getPropertyValue("--i"));
+    tk.querySelectorAll(".n").forEach((n) => { n.textContent = tnFmt(0, Number(n.dataset.dec), n.dataset.pre, n.dataset.suf); });
+    tonightTimers.push(setTimeout(() => tonightCount(tk), 550 + i * 140 + 580));
+  });
+  const last = el.querySelectorAll(".ticket").length;
+  tonightTimers.push(setTimeout(() => {
+    el.classList.remove("entering");
+    el.querySelectorAll(".tn-scroller").forEach((s) => { s.scrollLeft = 0; });
+  }, 550 + last * 140 + 1150));
+}
+
+function tonightCount(tk) {
+  tk.querySelectorAll(".n").forEach((n) => {
+    const to = Number(n.dataset.to), dec = Number(n.dataset.dec), pre = n.dataset.pre, suf = n.dataset.suf;
+    const t0 = performance.now(), dur = 700;
+    const step = (now) => {
+      if (!n.isConnected) return;
+      const k = Math.min(1, (now - t0) / dur);
+      n.textContent = tnFmt(to * (1 - Math.pow(1 - k, 3)), dec, pre, suf);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    tonightTimers.push(setTimeout(() => { n.textContent = tnFmt(to, dec, pre, suf); }, dur + 120));
+  });
+}
+
+function onTonightClick(e) {
+  const tk = e.target.closest(".ticket");
+  if (!tk || e.target.closest(".t-link")) return;          // links are handled by the data-goto listener
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (e.target.closest(".t-done")) {                          // Done: drop it off the rail, close the gap
+    markDone(tk.dataset.kind);
+    const track = tk.parentElement;
+    const finish = () => {
+      if (!tk.isConnected) return;
+      const sibs = [...track.querySelectorAll(".ticket")].filter((x) => x !== tk);
+      const before = new Map(sibs.map((s) => [s, s.getBoundingClientRect().left]));
+      tk.remove();
+      if (!reduce) sibs.forEach((s) => {
+        const dx = before.get(s) - s.getBoundingClientRect().left;
+        if (dx) s.animate([{ transform: `translateX(${dx}px)` }, { transform: "translateX(0)" }], { duration: 380, easing: "cubic-bezier(.2,.8,.2,1)" });
+      });
+      if (!track.querySelector(".ticket")) track.innerHTML = PASS_CLEAR;
+    };
+    if (reduce) { finish(); return; }
+    tk.classList.add("spiked");
+    setTimeout(finish, 620);
+    return;
+  }
+  if (reduce) return;                                         // tap a ticket: it swings on its clip
+  tk.classList.remove("swing"); void tk.offsetWidth; tk.classList.add("swing");
+  setTimeout(() => tk.classList.remove("swing"), 1000);
 }
 
 // ---------------------------------------------------------- Weekly Sales
@@ -2453,7 +2665,14 @@ function wireControls() {
     if (t) { closeMenu(); goTo(t.dataset.page); }
   });
   $("sideNav").addEventListener("change", (e) => { if (e.target.dataset.pin) setPinned(e.target.dataset.pin, e.target.checked); });
-  $("pinAll").addEventListener("click", () => { const on = new Set(pinnedTabs()); setAllPinned(!Object.keys(PAGE_NAMES).every((p) => on.has(p))); });
+  $("pinAll").addEventListener("click", () => {
+    const on = new Set(pinnedTabs());
+    const pinAll = !Object.keys(PAGE_NAMES).every((p) => on.has(p));
+    setAllPinned(pinAll);
+    if (!pinAll) goTo("home");                          // no tabs left: show Tonight
+  });
+  $("brandHome").addEventListener("click", () => goTo("home"));
+  $("tonight").addEventListener("click", onTonightClick);
 
   // Settings dialog
   $("settingsForm").addEventListener("submit", saveSettings);
