@@ -104,6 +104,39 @@ button, input, select { font-family: inherit; }
   .wordmark.splice, .wordmark.splice .wm-bot { transition: none; }
   .wordmark .wm-blade { display: none; }
 }
+
+/* ---------- The blade as a "working on it" line: loading screen and the
+   Specials wait. Sweeps in from the left, then out to the right. ---------- */
+.blade-track { position: relative; height: 3px; overflow: hidden; }
+.blade-track::after {
+  content: ""; position: absolute; inset: 0; background: var(--butter, #B8902C);
+  transform: scaleX(0); transform-origin: left center;
+  animation: blade-sweep 1.5s cubic-bezier(.6,0,.3,1) infinite;
+}
+@keyframes blade-sweep {
+  0%     { transform: scaleX(0); transform-origin: left center; }
+  50%    { transform: scaleX(1); transform-origin: left center; }
+  50.01% { transform: scaleX(1); transform-origin: right center; }
+  100%   { transform: scaleX(0); transform-origin: right center; }
+}
+.boot-blade { width: clamp(150px, 32vw, 230px); margin-top: -10px; }
+.menu-wait { margin-top: 12px; max-width: 420px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- Numbers that move (renderMoving in app.js): after a what-if or a
+   sales-week change, colors fade to their new state and rows that changed
+   glow gold for a moment. ---------- */
+.dot, .status-chip, .qtag, .metric .num, .dish-row .pct, .cost-summary .val, td.num {
+  transition: background-color .35s ease, color .35s ease, border-color .35s ease;
+}
+.moved { animation: row-moved 1.6s ease-out; }
+@keyframes row-moved { from { background-color: var(--butter-bg, #F3EBD3); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .blade-track::after { animation: none; transform: scaleX(1); opacity: .6; }
+  .dot, .status-chip, .qtag, .metric .num, .dish-row .pct, .cost-summary .val, td.num { transition: none; }
+  .moved { animation: none; }
+}
 .stage { display: flex; flex-direction: column; align-items: center; gap: 26px; width: 100%; max-width: 420px; }
 .stage-brand { text-align: center; }
 .stage .wordmark { font-size: clamp(52px, 11vw, 92px); }

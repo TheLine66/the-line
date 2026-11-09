@@ -36,6 +36,74 @@ function playLogoSplice(wm) {
   wm.classList.add("is-cutting");
 }
 
+// Numbers that move: used instead of render() when a what-if, scenario or sales
+// week changes. It notes what each number and status color showed, re-renders,
+// then counts each changed number from its old value, fades changed colors
+// (CSS transitions in styles.css) and glows the rows that changed.
+const MOVE_NUM = ".metric .num, .dish-row .pct, .cost-summary .val, td.num.mono";
+const MOVE_CLS = ".dot, .status-chip, .qtag, .metric, .dish-row .pct, .cost-summary .val";
+const MOVE_ROW = ".dish-row, #perfTable tbody tr, #panel table.ingredients tbody tr";
+
+function moveKeys(sel) {             // the same element gets the same key before and after a render
+  const out = new Map(), counts = {};
+  const page = document.querySelector(".page.active");
+  if (!page) return out;
+  page.querySelectorAll(sel).forEach((el) => {
+    const scope = el.closest("[data-id]")?.dataset.id || el.closest("[id]")?.id || "";
+    counts[scope] = (counts[scope] || 0) + 1;
+    out.set(scope + "|" + counts[scope], el);
+  });
+  return out;
+}
+
+function splitNum(text) {            // "$1,234.50" -> { pre: "$", val: 1234.5, dec: 2, comma: true, post: "" }
+  const m = /^([^\d-]*)(-?[\d,]*\d(?:\.(\d+))?)(.*)$/s.exec(String(text).trim());
+  if (!m) return null;
+  return { pre: m[1], val: parseFloat(m[2].replace(/,/g, "")), dec: (m[3] || "").length, comma: m[2].includes(","), post: m[4] };
+}
+
+function countNum(el, from, to, comma) {
+  const final = el.textContent, t0 = performance.now(), dur = 450;
+  const show = (v) => to.pre + (comma ? v.toLocaleString("en-US", { minimumFractionDigits: to.dec, maximumFractionDigits: to.dec }) : v.toFixed(to.dec)) + to.post;
+  el.textContent = show(from);
+  const step = (now) => {
+    if (!el.isConnected) return;
+    const k = Math.min(1, (now - t0) / dur);
+    if (k >= 1) { el.textContent = final; return; }
+    el.textContent = show(from + (to.val - from) * (1 - Math.pow(1 - k, 3)));
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  setTimeout(() => { if (el.isConnected) el.textContent = final; }, dur + 100);   // lands even if frames are paused (tab in background)
+}
+
+function renderMoving() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { render(); return; }
+  const pageBefore = document.querySelector(".page.active")?.id;
+  const oldNums = new Map([...moveKeys(MOVE_NUM)].map(([k, el]) => [k, el.textContent]));
+  const oldCls = new Map([...moveKeys(MOVE_CLS)].map(([k, el]) => [k, el.className]));
+  render();
+  if (document.querySelector(".page.active")?.id !== pageBefore) return;
+
+  const moved = new Set(), fades = [];
+  moveKeys(MOVE_CLS).forEach((el, k) => {
+    const was = oldCls.get(k);
+    if (was == null || was === el.className) return;
+    fades.push([el, el.className]); el.className = was;      // show the old color for one frame…
+    const row = el.closest(MOVE_ROW); if (row) moved.add(row);
+  });
+  moveKeys(MOVE_NUM).forEach((el, k) => {
+    const was = oldNums.get(k);
+    if (was == null || was === el.textContent) return;
+    const a = splitNum(was), b = splitNum(el.textContent);
+    if (!a || !b || a.pre !== b.pre || a.post !== b.post || a.val === b.val) return;
+    countNum(el, a.val, b, a.comma || b.comma);
+    const row = el.closest(MOVE_ROW); if (row) moved.add(row);
+  });
+  if (fades.length) { void document.body.offsetWidth; fades.forEach(([el, c]) => { el.className = c; }); }   // …then fade to the new one
+  moved.forEach((row) => { row.classList.add("moved"); row.addEventListener("animationend", () => row.classList.remove("moved"), { once: true }); });
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -730,7 +798,7 @@ function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
   const body = sorted.map((r) => {
     const q = quadrantOf(r.units, r.marginPerPlate, avgUnits, avgMargin);
     const share = totalMargin ? (r.weeklyMargin / totalMargin) * 100 : 0;
-    return `<tr>
+    return `<tr data-id="${r.d.id}">
         <td class="dishname"><span class="dot ${r.status}" style="margin-right:8px;vertical-align:middle"></span>${esc(r.d.name)}</td>
         <td class="num mono">${r.units}</td>
         <td class="num mono">${fmt(r.d.price)}</td>
@@ -1795,6 +1863,7 @@ async function makeMenu() {
   if (menuMode === "event" && !$("evName").value.trim()) { toast("Say what the event is first.", "err"); $("evName").focus(); return; }
   const btn = $("makeMenuBtn"), note = $("makeMenuNote");
   btn.disabled = true; note.textContent = "Gemini is writing your menu. This takes a few seconds…";
+  $("makeMenuBlade").classList.remove("hidden");
   try {
     const { data } = await sb.auth.getSession();
     const request = menuRequest();
@@ -1818,7 +1887,7 @@ async function makeMenu() {
   } catch {
     note.textContent = "";
     toast("Couldn't reach the menu assistant. Check your internet and try again.", "err");
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; $("makeMenuBlade").classList.add("hidden"); }
 }
 
 // Match the ingredient names Gemini used to the real ingredient list.
@@ -2121,7 +2190,7 @@ function loadScenario(id) {
     adjustments[k] = Number(v);
     priceMultipliers[k] = 1 + Number(v) / 100;
   }
-  render();
+  renderMoving();
   $("scenarioSelect").value = id;
   toast(`Loaded "${s.name}"` + (skipped ? ` (${skipped} deleted ingredient${skipped > 1 ? "s" : ""} skipped)` : "") + ".");
 }
@@ -2393,7 +2462,7 @@ function wireControls() {
   $("deleteAccountBtn").addEventListener("click", deleteAccount);
 
   // What-if bar
-  $("weekSelect").addEventListener("change", (e) => { selectedWeek = e.target.value || null; render(); });
+  $("weekSelect").addEventListener("change", (e) => { selectedWeek = e.target.value || null; renderMoving(); });
   $("signPlus").addEventListener("click", () => { sign = 1; $("signPlus").classList.add("active"); $("signMinus").classList.remove("active"); });
   $("signMinus").addEventListener("click", () => { sign = -1; $("signMinus").classList.add("active"); $("signPlus").classList.remove("active"); });
   $("applyBtn").addEventListener("click", () => {
@@ -2406,15 +2475,15 @@ function wireControls() {
     if (signed === 0) { delete adjustments[key]; delete priceMultipliers[key]; }
     else { adjustments[key] = signed; priceMultipliers[key] = 1 + signed / 100; }
     $("scenarioSelect").value = "";
-    render();
+    renderMoving();
   });
-  $("resetBtn").addEventListener("click", () => { resetWhatIf(); render(); });
+  $("resetBtn").addEventListener("click", () => { resetWhatIf(); renderMoving(); });
   $("activeAdj").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-key]");
     if (!b) return;
     delete adjustments[b.dataset.key]; delete priceMultipliers[b.dataset.key];
     $("scenarioSelect").value = "";
-    render();
+    renderMoving();
   });
   $("scenarioSelect").addEventListener("change", (e) => { if (e.target.value) loadScenario(e.target.value); });
   $("saveScenarioBtn").addEventListener("click", saveScenario);

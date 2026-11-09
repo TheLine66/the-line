@@ -28,7 +28,13 @@
 <body>
 
 <!-- ============ Loading ============ -->
-<div id="boot" class="screen center"><p class="muted">Loading…</p></div>
+<div id="boot" class="screen center" role="status">
+  <div class="stage">
+    <div class="stage-brand"><div class="wordmark" aria-hidden="true"><span class="wm-top">The Line</span><span class="wm-bot">The Line</span></div></div>
+    <div class="blade-track boot-blade" aria-hidden="true"></div>
+    <span class="sr-only">Loading…</span>
+  </div>
+</div>
 
 <!-- ============ Config missing ============ -->
 <div id="setupNeeded" class="screen center hidden">
@@ -330,6 +336,7 @@
           <button class="applybtn" id="makeMenuBtn" type="button">Make the menu</button>
           <span class="note" id="makeMenuNote"></span>
         </div>
+        <div class="blade-track menu-wait hidden" id="makeMenuBlade" aria-hidden="true"></div>
       </div>
       <div class="chart-card hidden" id="menuResult"></div>
       <div class="chart-card">
