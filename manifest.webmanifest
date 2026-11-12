@@ -1,7 +1,7 @@
 {
   "name": "The Line",
   "short_name": "The Line",
-  "description": "Recipe cost & sales performance tracker",
+  "description": "Slowing down the rush",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

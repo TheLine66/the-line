@@ -212,7 +212,7 @@ This makes sure any email links (for example, password resets) send people to yo
 | **Weekly Sales** | Type plates sold per dish for any week, then click **Save this week** |
 | **Ingredients** | Change a real price (it saves when you click away), add new ingredients, or delete unused ones |
 | **Recipes** | Add a dish, change its price, or add and remove ingredients, then click **Save dish** |
-| **Labor Costs** | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
+| **Labor Costs** *(put away for now: set `LABOR_ON = true` near the top of the page list in `app.js` to bring it back)* | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
 | **MOD Report** | The manager on duty fills one in every shift: weather, covers by hour (peak times are highlighted), staffing, employee and guest issues, comps and voids, 86'd items, maintenance, cash and closing checks, tomorrow's forecast, and notes. **Print / save as PDF** makes a clean copy to share. |
 
 **The what-if bar** (on Cost Tracker and Performance) works like it did in your prototype. You can now also click **Save** to keep a scenario like "Beef +15%", and reload it later from the **Saved scenarios** menu.
@@ -237,6 +237,7 @@ The **Specials** page writes a weekly specials menu, or a party menu for a group
 1. In Supabase, open **SQL Editor** → **New query**.
 2. Paste in everything from `supabase/spoilage.sql` and click **Run**. You should see "Success. No rows returned."
 3. On the **Ingredients** tab, each ingredient now has **On hand** and **Use by**. Fill them in. A sample Kelley's comes with them filled in.
+4. Sample dates count from the day Kelley's was made, so after a while everything looks spoiled. To reset them, run `supabase/refresh-use-by.sql` the same way. The soonest use-by date becomes tomorrow.
 
 ### Step B: Give Vercel your Gemini key (once)
 Your key is like a password. **Never** put it in a file, in GitHub, or in a chat. It only goes in Vercel's settings:

@@ -473,13 +473,19 @@ function computeAll() {
 }
 
 // ================================================================ RENDER
+// Labor Costs is put away for now. Its code, tables and saved hours are all
+// kept: set this back to true to bring the tab (and labor on Tonight and in
+// Settings) back exactly as it was.
+const LABOR_ON = false;
+
 const PAGE_NAMES = { home: "Tonight", cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
   recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
+if (!LABOR_ON) delete PAGE_NAMES.labor;
 
 // Which pages show as tabs in the row under the logo. Saved in this
 // browser; every page is always reachable from the Menu.
 const TABS_KEY = "line.tabs";
-const DEFAULT_TABS = ["cost", "perf", "specials", "labor", "mod"];
+const DEFAULT_TABS = ["cost", "perf", "specials", "labor", "mod"].filter((p) => p in PAGE_NAMES);
 function pinnedTabs() {
   try {
     const v = JSON.parse(safeGet(TABS_KEY) || "null");
@@ -513,6 +519,7 @@ function renderTabs() {
 
 function render() {
   if (!rest) return;
+  if (!(activePage in PAGE_NAMES)) activePage = "cost";   // e.g. a page that's been put away
   $("whereRest").textContent = rest.name;
   $("wherePage").textContent = PAGE_NAMES[activePage];
   renderTabs();
@@ -912,7 +919,7 @@ function weekTickets(t, week) {
         tnLines([["Dishes in the red", `${red} of ${dishes.length}`, red ? "over" : ""], ["On target", `${ok} of ${dishes.length}`, "good"]]) });
   }
   // Labor
-  if (extrasReady && week && laborByWeek.has(week)) {
+  if (LABOR_ON && extrasReady && week && laborByWeek.has(week)) {
     const lt = laborTotals(laborByWeek.get(week)), revenue = salesForWeek(week).revenue;
     out.push({ kind: "labor", title: "Labor", goto: "labor", link: "Open Labor Costs",
       body: `<div class="t-big">${revenue ? `${tnNum(lt.total / revenue * 100, { dec: 1, suf: "%" })} of sales` : tnNum(Math.round(lt.total), { pre: "$" })}</div>` +
@@ -2467,7 +2474,7 @@ function openSettings() {
   $("setLow").value = Number(rest.target_low);
   $("setMid").value = Number(rest.target_mid);
   $("setHigh").value = Number(rest.target_high);
-  const hasLabor = "labor_low" in rest;
+  const hasLabor = LABOR_ON && "labor_low" in rest;
   $("laborSettings").classList.toggle("hidden", !hasLabor);
   if (hasLabor) {
     $("setLaborLow").value = Number(rest.labor_low);
@@ -2488,7 +2495,7 @@ async function saveSettings(e) {
   if (![low, mid, high].every((n) => Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Targets must be between 0 and 100."; return; }
   if (!(low <= mid && mid <= high)) { $("settingsMsg").textContent = "Targets must go low ≤ mid ≤ high."; return; }
   const changes = { name, target_low: low, target_mid: mid, target_high: high };
-  if ("labor_low" in rest) {
+  if (LABOR_ON && "labor_low" in rest) {
     const ll = Number($("setLaborLow").value), lm = Number($("setLaborMid").value), lh = Number($("setLaborHigh").value), lb = Number($("setBurden").value);
     if (![ll, lm, lh, lb].every((n) => $("setLaborLow").value !== "" && Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Labor targets and the add-on must be between 0 and 100."; return; }
     if (!(ll <= lm && lm <= lh)) { $("settingsMsg").textContent = "Labor targets must go low ≤ mid ≤ high."; return; }
