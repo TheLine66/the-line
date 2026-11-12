@@ -183,7 +183,8 @@ let modReports = [];           // newest first: [{id, report_date, shift, manage
 let extrasReady = true;        // false until supabase/labor-and-mod.sql has been run
 let posEnabled = false;       // this restaurant has The Line POS add-on (and its tables exist)
 let stockReady = true;         // false until supabase/spoilage.sql has been run (on hand + use by)
-let menuMode = "weekly";       // Specials page: "weekly" or "party"
+let menuMode = "weekly";       // Specials page: "weekly", "party", "event" or "free"
+let recentDishes = [];         // dish names Gemini suggested lately, so it doesn't repeat itself
 let lastMenu = null;           // the last menu Gemini wrote (not saved)
 let laborWeek = null;          // week shown on the Labor Costs tab
 let laborRaise = { dept: "all", pct: 0 };  // what-if wage change (not saved)
@@ -2052,6 +2053,7 @@ function renderSpecials() {
   $("weeklyFields").classList.toggle("hidden", menuMode !== "weekly");
   $("partyFields").classList.toggle("hidden", menuMode !== "party");
   $("eventFields").classList.toggle("hidden", menuMode !== "event");
+  $("freeFields").classList.toggle("hidden", menuMode !== "free");
   if (lastMenu) renderMenuResult(); else $("menuResult").classList.add("hidden");
 }
 
@@ -2066,8 +2068,15 @@ function menuRequest() {
       return { name: d.name, category: d.category, price: d.price, food_cost_pct: d.price ? (c / d.price) * 100 : 0, weekly_units: salesByWeek.get(sortedWeeks()[0])?.get(d.id) ?? null };
     }),
   };
-  if (menuMode === "event") {
-    body.event = { name: $("evName").value, colors: $("evColors").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, personal: $("evPersonal").value, notes: $("evNotes").value };
+  const colors = $("menuColors").value.trim();
+  body.colors = colors;
+  body.colors_hex = parseColors(colors);
+  body.avoid = recentDishes.slice(0, 24);
+  if (menuMode === "free") {
+    body.brief = $("fsBrief").value;
+    body.count = Number($("fsCount").value) || 4;
+  } else if (menuMode === "event") {
+    body.event = { name: $("evName").value, count: Number($("evCount").value) || 5, crowd: $("evCrowd").value, personal: $("evPersonal").value, notes: $("evNotes").value };
   } else if (menuMode === "party") {
     body.party = { type: $("ptType").value, guests: Number($("ptGuests").value) || 20, style: $("ptStyle").value, personal: $("ptPersonal").value, notes: $("ptNotes").value };
   } else {
@@ -2077,9 +2086,45 @@ function menuRequest() {
   return body;
 }
 
-async function makeMenu() {
+// Turn "orange and white" or "#FF8200, navy" into exact hex codes, so the
+// menu uses the same colors every time instead of Gemini's guess.
+const COLOR_NAMES = {
+  "tennessee orange": "#FF8200", "vols orange": "#FF8200", "smokey gray": "#58595B", "smokey grey": "#58595B",
+  "kentucky blue": "#0033A0", "wildcat blue": "#0033A0", "carolina blue": "#7BAFD4", "crimson": "#9E1B32",
+  "kelly green": "#4CBB17", "forest green": "#228B22", "hunter green": "#355E3B", "dark green": "#1F4D3A", "lime green": "#32CD32", "mint green": "#98E2C6", "mint": "#98E2C6", "sage": "#9CAF88", "olive": "#708238",
+  "navy blue": "#1B2A4A", "navy": "#1B2A4A", "royal blue": "#1D4ED8", "sky blue": "#87CEEB", "light blue": "#9CC9F0", "baby blue": "#A7C7E7", "powder blue": "#B0D4E8", "dark blue": "#13294B", "teal": "#0F7C80", "turquoise": "#30C5C0", "aqua": "#3FD0D4",
+  "dark red": "#8B1A1A", "cardinal": "#C41E3A", "scarlet": "#BB0000", "maroon": "#6E1A2D", "burgundy": "#7A1F33", "wine": "#722F37", "brick": "#A4442A", "rust": "#B7410E",
+  "hot pink": "#FF4FA3", "light pink": "#F8C8DC", "blush": "#F4C2C2", "pink": "#F48FB1", "magenta": "#C2187A", "coral": "#FF7F6B", "peach": "#FFCBA4", "salmon": "#F28B72",
+  "lavender": "#B9A6E0", "lilac": "#C8A2C8", "purple": "#5B2A86", "violet": "#7F3FBF",
+  "burnt orange": "#BF5700", "orange": "#FF8200", "gold": "#C9A227", "old gold": "#B3995D", "mustard": "#D4A017", "lemon": "#FFF44F", "yellow": "#FFD100", "butter": "#F6E3A1",
+  "cream": "#FBF5E6", "ivory": "#FFFFF0", "beige": "#E8DCC4", "tan": "#D2B48C", "khaki": "#C3B091", "brown": "#6B4226", "chocolate": "#4E2A1E", "copper": "#B87333", "bronze": "#A97142",
+  "silver": "#A7A9AC", "light gray": "#D9D9D6", "light grey": "#D9D9D6", "charcoal": "#36454F", "gray": "#808080", "grey": "#808080",
+  "black": "#111111", "white": "#FFFFFF", "red": "#C8102E", "blue": "#1F5BB5", "green": "#2E7D32",
+};
+function parseColors(text) {
+  let rest = " " + String(text || "").toLowerCase().replace(/[^a-z0-9# ]+/g, " ") + " ";
+  const found = [];
+  for (const m of rest.matchAll(/#([0-9a-f]{6}|[0-9a-f]{3})\b/g)) {
+    const h = m[1].length === 3 ? m[1].split("").map((c) => c + c).join("") : m[1];
+    found.push({ at: m.index, hex: "#" + h.toUpperCase() });
+  }
+  // Longest names first, so "burnt orange" wins over "orange".
+  for (const name of Object.keys(COLOR_NAMES).sort((a, b) => b.length - a.length)) {
+    const re = new RegExp(` ${name} `, "g");
+    let m;
+    while ((m = re.exec(rest))) {
+      found.push({ at: m.index, hex: COLOR_NAMES[name] });
+      rest = rest.slice(0, m.index + 1) + " ".repeat(name.length) + rest.slice(m.index + 1 + name.length);
+      re.lastIndex = 0;
+    }
+  }
+  return [...new Set(found.sort((a, b) => a.at - b.at).map((f) => f.hex))].slice(0, 6);
+}
+
+async function makeMenu(again = false) {
   if (!ingredients.size) { toast("Add some ingredients first.", "err"); return; }
   if (menuMode === "event" && !$("evName").value.trim()) { toast("Say what the event is first.", "err"); $("evName").focus(); return; }
+  if (menuMode === "free" && !$("fsBrief").value.trim()) { toast("Throw in a few words first: a theme, a guest, a mood, anything.", "err"); $("fsBrief").focus(); return; }
   const btn = $("makeMenuBtn"), note = $("makeMenuNote");
   btn.disabled = true; note.textContent = "Gemini is writing your menu. This takes a few seconds…";
   $("makeMenuBlade").classList.remove("hidden");
@@ -2099,7 +2144,9 @@ async function makeMenu() {
       return;
     }
     if (!r.ok) { note.textContent = ""; toast(out.error || "Something went wrong. Try again.", "err"); return; }
-    lastMenu = { ...out, request, picture: lastMenu?.picture };   // keep an added picture across new versions
+    // "Try another version" keeps the picture and any colors or border you picked.
+    lastMenu = { ...out, request, picture: again ? lastMenu?.picture : undefined, look: again ? lastMenu?.look : undefined };
+    recentDishes = [...out.menu.items.map((it) => String(it.name || "")).filter(Boolean), ...recentDishes].slice(0, 24);
     note.textContent = "";
     renderMenuResult();
     $("menuResult").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2107,6 +2154,37 @@ async function makeMenu() {
     note.textContent = "";
     toast("Couldn't reach the menu assistant. Check your internet and try again.", "err");
   } finally { btn.disabled = false; $("makeMenuBlade").classList.add("hidden"); }
+}
+
+// A picture for the top of the menu from Gemini's picture model.
+let lookTimer = null;
+async function makePicture() {
+  if (!lastMenu) return;
+  const btn = $("makePictureBtn"), note = $("pictureNote");
+  btn.disabled = true; note.textContent = "Gemini is making a picture. This can take 10 to 20 seconds…";
+  $("pictureBlade").classList.remove("hidden");
+  try {
+    const { data } = await sb.auth.getSession();
+    const { menu, mode, request } = lastMenu;
+    const th = menuTheme(menu.theme, request.colors_hex || []), look = lastMenu.look || {};
+    const occasion = mode === "event" ? request.event.name : mode === "party" ? `${request.party.type || "a party"}${request.party.personal ? `: ${request.party.personal}` : ""}` : mode === "free" ? request.brief : "this week's specials";
+    const details = [request.event?.personal, request.party?.personal, menu.tagline, request.colors].filter(Boolean).join(". ");
+    const r = await fetch("/api/specials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+      body: JSON.stringify({ action: "image", style: $("pictureStyle").value, occasion, details,
+        colors: [look.bg || th.bg, look.accent || th.accent, th.accent2],
+        menu: { title: menu.title, items: menu.items.map((it) => ({ name: it.name, description: it.description })) } }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.image) { note.textContent = ""; toast(out.error || "Couldn't make a picture. Try again.", "err"); return; }
+    if (lastMenu.menu !== menu) return;   // a new menu came in meanwhile
+    lastMenu.picture = out.image;
+    renderMenuResult();
+  } catch {
+    note.textContent = "";
+    toast("Couldn't reach the menu assistant. Check your internet and try again.", "err");
+  } finally { if ($("makePictureBtn")) $("makePictureBtn").disabled = false; if ($("pictureBlade")) $("pictureBlade").classList.add("hidden"); }
 }
 
 // Match the ingredient names Gemini used to the real ingredient list.
@@ -2144,14 +2222,32 @@ const MENU_FONTS = {
   playful: "'Trebuchet MS', 'Segoe UI', Verdana, sans-serif",
   elegant: "Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif",
 };
-function menuTheme(t = {}) {
+// The owner's colors are the only ones allowed (plus white and near-black
+// for readable text): each color Gemini picked snaps to the closest one.
+function rgb(hex) { return [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16)); }
+function nearest(hex, allowed) {
+  const [r, g, b] = rgb(hex);
+  return allowed.reduce((best, c) => { const [x, y, z] = rgb(c), d = (r - x) ** 2 + (g - y) ** 2 + (b - z) ** 2; return d < best.d ? { c, d } : best; }, { c: allowed[0], d: Infinity }).c;
+}
+function menuTheme(t = {}, owner = []) {
+  if (owner.length) {
+    const allowed = [...owner, "#FFFFFF", "#111111"];
+    const snap = (v) => (HEX.test(String(v || "").trim()) ? nearest(String(v).trim(), allowed) : v);
+    t = { ...t, background: snap(t.background), text: snap(t.text), accent: snap(t.accent), accent2: snap(t.accent2) };
+    // Make sure the owner's colors actually show up somewhere.
+    if (![t.background, t.accent, t.accent2].some((c) => owner.includes(c))) t.accent = owner[0];
+    if (owner[1] && ![t.background, t.accent, t.accent2].includes(owner[1])) t.accent2 = owner[1];
+  }
   const bg = hexOr(t.background, "#FBF9F5");
   let ink = hexOr(t.text, "#262624");
   if (contrast(bg, ink) < 4.5) ink = contrast(bg, "#111111") >= contrast(bg, "#FFFFFF") ? "#111111" : "#FFFFFF";
+  // The title, prices and borders are big and bold, so a team color like
+  // Tennessee orange on white is fine. Only a color that nearly disappears
+  // (yellow on white, navy on black) is swapped for the text color.
   let accent = hexOr(t.accent, ink);
-  if (contrast(bg, accent) < 3) accent = ink;
+  if (contrast(bg, accent) < 2) accent = ink;
   let accent2 = hexOr(t.accent2, accent);
-  if (contrast(bg, accent2) < 3) accent2 = accent;
+  if (contrast(bg, accent2) < 2) accent2 = accent;
   const style = String(t.style || "").toLowerCase().trim();
   return { bg, ink, accent, accent2, style: MENU_FONTS[style] ? style : "classic" };
 }
@@ -2183,9 +2279,23 @@ const MOTIFS = {
   flower: `<circle cx="24" cy="12" r="7"/><circle cx="35" cy="21" r="7"/><circle cx="31" cy="34" r="7"/><circle cx="17" cy="34" r="7"/><circle cx="13" cy="21" r="7"/><circle class="c" cx="24" cy="24" r="5"/>`,
   leaf: `<path d="M8 40C8 18 22 8 42 6c-2 20-12 34-34 34z"/><path class="c" d="M10 38 34 14" stroke-width="2" fill="none"/>`,
 };
-const PATTERNS = ["checkerboard", "stripes", "dots"];
+const PATTERNS = ["stripes", "dots", "confetti", "zigzag", "waves", "checkerboard"];
+const PATTERN_NAMES = { none: "No border", stripes: "Stripes", dots: "Dots", confetti: "Confetti", zigzag: "Zigzag", waves: "Waves", checkerboard: "Checkerboard" };
 function motifSvg(name, color) {
   return `<svg class="mp-motif" viewBox="0 0 48 48" aria-hidden="true" style="color:${color}">${MOTIFS[name]}</svg>`;
+}
+
+// Waves and confetti are drawn as small repeating SVG tiles (cleaner than CSS).
+function bandSvg(pattern, th, n) {
+  const id = `mpband${n}`;
+  const tile = {
+    waves: `<pattern id="${id}" width="32" height="18" patternUnits="userSpaceOnUse"><path d="M0 9 Q8 2 16 9 T32 9" fill="none" stroke="${th.accent}" stroke-width="3" stroke-linecap="round"/></pattern>`,
+    confetti: `<pattern id="${id}" width="64" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="7" cy="7" r="3.5" fill="${th.accent}"/><rect x="20" y="13" width="9" height="4" rx="1" fill="${th.accent2}" transform="rotate(-25 24 15)"/>
+      <circle cx="38" cy="6" r="2.5" fill="${th.accent2}"/><rect x="46" y="11" width="8" height="4" rx="1" fill="${th.accent}" transform="rotate(30 50 13)"/>
+      <circle cx="58" cy="19" r="2" fill="${th.accent}"/><circle cx="14" cy="19" r="2" fill="${th.accent2}"/></pattern>`,
+  }[pattern];
+  return tile ? `<svg aria-hidden="true"><defs>${tile}</defs><rect width="100%" height="100%" fill="url(#${id})"/></svg>` : "";
 }
 
 function renderMenuResult() {
@@ -2195,24 +2305,27 @@ function renderMenuResult() {
   const costed = menu.items.map((it) => ({ it, ...costItem(it) }));
 
   // 1. The menu guests see, in the theme's colors.
-  const th = menuTheme(menu.theme);
-  const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : "This week's specials";
+  // Colors and border: Gemini's pick, then anything the owner changed below the menu.
+  const look = lastMenu.look || {};
+  let th = menuTheme(menu.theme, request.colors_hex || []);
+  if (look.bg || look.ink || look.accent) th = { ...th, bg: look.bg || th.bg, ink: look.ink || th.ink, accent: look.accent || th.accent, accent2: look.accent || th.accent2 };
+  const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : mode === "free" ? "" : "This week's specials";
   const motifs = (Array.isArray(menu.motifs) ? menu.motifs : []).map((m) => String(m).trim().toLowerCase()).filter((m) => MOTIFS[m]).slice(0, 4);
-  const pattern = PATTERNS.includes(String(menu.pattern || "").toLowerCase()) ? String(menu.pattern).toLowerCase() : "none";
+  const pattern = look.pattern || (PATTERNS.includes(String(menu.pattern || "").toLowerCase()) ? String(menu.pattern).toLowerCase() : "none");
   const sayings = (Array.isArray(menu.sayings) ? menu.sayings : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
-  const band = pattern === "none" ? "" : `<div class="mp-band pat-${pattern}" aria-hidden="true"></div>`;
+  const band = (n) => (pattern === "none" ? "" : `<div class="mp-band pat-${pattern}" aria-hidden="true">${bandSvg(pattern, th, n)}</div>`);
   const poster = `<div class="menu-poster mp-${th.style}${pattern === "none" ? "" : " has-band"}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
-      ${band}
+      ${band(1)}
       ${lastMenu.picture ? `<img class="mp-picture" src="${lastMenu.picture}" alt="">` : ""}
       ${motifs.length ? `<div class="mp-motifs">${motifs.map((m, i) => motifSvg(m, i % 2 ? "var(--mp-accent2)" : "var(--mp-accent)")).join("")}</div>` : ""}
-      <div class="mp-kicker">${esc(rest.name)} · ${esc(kicker)}</div>
+      <div class="mp-kicker">${esc(rest.name)}${kicker ? ` · ${esc(kicker)}` : ""}</div>
       <h3 class="mp-title">${esc(menu.title)}</h3>
       ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
       <div class="mp-items">${menu.items.map((it) => `<div class="mp-item">
         <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
         <div class="mp-desc">${esc(it.description)}</div></div>`).join("")}</div>
       ${sayings.length ? `<div class="mp-sayings">${sayings.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
-      ${band}
+      ${band(2)}
     </div>`;
 
   // 2. Behind the numbers: costs checked against real ingredient prices.
@@ -2244,13 +2357,25 @@ function renderMenuResult() {
   el.innerHTML = `
     <div class="chart-head"><h3>Your menu</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
     ${poster}
+    <div class="menu-look" role="group" aria-label="Change the menu's look">
+      <label>Background<input type="color" data-look="bg" value="${th.bg}"></label>
+      <label>Text<input type="color" data-look="ink" value="${th.ink}"></label>
+      <label>Title and prices<input type="color" data-look="accent" value="${th.accent}"></label>
+      <label>Border<select data-look="pattern">${Object.entries(PATTERN_NAMES).map(([k, v]) => `<option value="${k}" ${k === pattern ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      ${look.bg || look.ink || look.accent || look.pattern ? `<button class="linkbtn" id="resetLook" type="button">Back to Gemini's look</button>` : ""}
+      ${contrast(th.bg, th.ink) < 4.5 ? `<span class="look-warn">The text is hard to read on this background.</span>` : ""}
+    </div>
     <div class="row-actions">
       <button class="applybtn" id="printMenuBtn" type="button">Print the menu</button>
       <button class="ghostbtn dark" id="remakeMenuBtn" type="button">Try another version</button>
-      <label class="ghostbtn dark pic-btn">${lastMenu.picture ? "Change picture" : "Add your own picture"}<input type="file" id="menuPicture" accept="image/*" hidden></label>
+      <button class="ghostbtn dark" id="makePictureBtn" type="button">${lastMenu.picture ? "Make a new picture" : "Make a picture with Gemini"}</button>
+      <select id="pictureStyle" aria-label="Picture style"><option value="photo" ${lastMenu.pictureStyle !== "illustration" ? "selected" : ""}>Food photo</option><option value="illustration" ${lastMenu.pictureStyle === "illustration" ? "selected" : ""}>Illustration</option></select>
+      <label class="ghostbtn dark pic-btn">${lastMenu.picture ? "Use my own picture" : "Add your own picture"}<input type="file" id="menuPicture" accept="image/*" hidden></label>
       ${lastMenu.picture ? `<button class="linkbtn" id="removePicture" type="button">Remove picture</button>` : ""}
+      <span class="note" id="pictureNote"></span>
     </div>
-    <p class="note pic-note">Pictures stay in this browser and are only used on this menu. Only add logos or photos you have permission to use.</p>
+    <div class="blade-track menu-wait hidden" id="pictureBlade" aria-hidden="true"></div>
+    <p class="note pic-note">Pictures stay in this browser and are only used on this menu. Only add logos or photos you have permission to use. Gemini's pictures never include logos, mascots or words.</p>
     <div class="mp-details">
       <div class="section-label">Behind the numbers</div>
       ${menu.intro ? `<p class="menu-intro">${esc(menu.intro)}</p>` : ""}
@@ -2791,8 +2916,16 @@ function wireControls() {
 
   // Specials
   document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { if (voice) voice.rec.stop(); menuMode = b.dataset.mode; renderSpecials(); }));
-  $("makeMenuBtn").addEventListener("click", makeMenu);
+  $("makeMenuBtn").addEventListener("click", () => makeMenu(false));
+  $("menuResult").addEventListener("input", (e) => {
+    const k = e.target.dataset.look;
+    if (!k || !lastMenu || e.target.type !== "color") return;
+    lastMenu.look = { ...(lastMenu.look || {}), [k]: e.target.value.toUpperCase() };
+    clearTimeout(lookTimer); lookTimer = setTimeout(renderMenuResult, 120);   // redraw while dragging, not on every pixel
+  });
   $("menuResult").addEventListener("change", (e) => {
+    if (e.target.dataset.look === "pattern" && lastMenu) { lastMenu.look = { ...(lastMenu.look || {}), pattern: e.target.value }; renderMenuResult(); return; }
+    if (e.target.id === "pictureStyle" && lastMenu) { lastMenu.pictureStyle = e.target.value; return; }
     if (e.target.id !== "menuPicture" || !e.target.files[0] || !lastMenu) return;
     const file = e.target.files[0];
     if (!/^image\//.test(file.type)) { toast("That file isn't a picture.", "err"); return; }
@@ -2803,7 +2936,9 @@ function wireControls() {
   });
   $("menuResult").addEventListener("click", (e) => {
     if (e.target.closest("#removePicture")) { if (lastMenu) { delete lastMenu.picture; renderMenuResult(); } return; }
-    if (e.target.closest("#remakeMenuBtn")) makeMenu();
+    if (e.target.closest("#resetLook")) { if (lastMenu) { delete lastMenu.look; renderMenuResult(); } return; }
+    if (e.target.closest("#makePictureBtn")) { makePicture(); return; }
+    if (e.target.closest("#remakeMenuBtn")) makeMenu(true);
     else if (e.target.closest("#printMenuBtn")) window.print();
   });
 

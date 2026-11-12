@@ -258,7 +258,8 @@ footer { color: var(--ink-2); }
 .pos-bar .note { flex: 1; min-width: 220px; }
 @media print { .pos-bar { display: none !important; } }
 .voice-field { display: flex; gap: 8px; align-items: stretch; }
-.voice-field input { flex: 1; min-width: 0; }
+.voice-field input, .voice-field textarea { flex: 1; min-width: 0; }
+.voice-field textarea { resize: vertical; font: inherit; }
 .mic-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }
 .mic-btn[hidden] { display: none; }
 .mic-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
@@ -320,22 +321,33 @@ footer { color: var(--ink-2); }
 .pat-checkerboard { background: conic-gradient(var(--mp-accent) 25%, var(--mp-bg) 0 50%, var(--mp-accent) 0 75%, var(--mp-bg) 0) 0 0 / 22px 22px; }
 .pat-stripes { background: repeating-linear-gradient(-45deg, var(--mp-accent) 0 10px, var(--mp-bg) 10px 20px); }
 .pat-dots { height: 18px; background: radial-gradient(circle, var(--mp-accent) 0 4px, transparent 4.5px) 0 0 / 18px 18px; }
+.pat-zigzag { height: 20px; background:
+  linear-gradient(135deg, var(--mp-accent) 25%, transparent 25%) -10px 0 / 20px 20px,
+  linear-gradient(225deg, var(--mp-accent) 25%, transparent 25%) -10px 0 / 20px 20px,
+  linear-gradient(315deg, var(--mp-accent) 25%, transparent 25%) 0 0 / 20px 20px,
+  linear-gradient(45deg, var(--mp-accent) 25%, transparent 25%) 0 0 / 20px 20px; }
+.mp-band svg { display: block; width: 100%; height: 100%; }
 .mp-motifs { display: flex; justify-content: center; gap: 16px; margin-bottom: 12px; }
 .mp-motif { width: 46px; height: 46px; fill: currentColor; stroke: currentColor; stroke-width: 0; stroke-linecap: round; stroke-linejoin: round; }
 .mp-motif .c, .mp-motif .c * { fill: var(--mp-bg); stroke: var(--mp-bg); }
 .mp-motif .line { fill: none; stroke: currentColor; }
 .mp-motif [fill="none"] { fill: none; }
-.mp-picture { display: block; max-width: min(80%, 360px); max-height: 220px; margin: 0 auto 16px; object-fit: contain; border-radius: 6px; }
+.mp-picture { display: block; max-width: min(90%, 560px); max-height: 320px; margin: 0 auto 16px; object-fit: contain; border-radius: 6px; }
 .mp-sayings { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 0; margin-top: 24px; font: 700 13px Verdana, Geneva, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mp-accent2); }
 .mp-sayings span + span::before { content: "\2605"; margin: 0 12px; color: var(--mp-accent); }
 .pic-btn { cursor: pointer; }
+.menu-look { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 18px; margin: 14px 0 6px; }
+.menu-look label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; }
+.menu-look input[type="color"] { width: 54px; height: 34px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); cursor: pointer; }
+.menu-look select { min-width: 140px; }
+.look-warn { font-size: 13px; color: var(--rust, #A4442A); }
 .pic-note { margin: 0 0 4px; }
 @media (max-width: 560px) { .mp-motif { width: 36px; height: 36px; } }
 
 @media print {
   #page-specials.active .chart-card:not(#menuResult) { display: none !important; }
   #menuResult { border: none !important; padding: 0 !important; }
-  #menuResult .chart-head, #menuResult .mp-details { display: none !important; }   /* print just the menu */
+  #menuResult .chart-head, #menuResult .mp-details, #menuResult .menu-look, #menuResult .pic-note, #menuResult .blade-track { display: none !important; }   /* print just the menu */
   .menu-poster { margin: 0; }
 }
 

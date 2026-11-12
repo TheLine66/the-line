@@ -2,17 +2,22 @@
 // The Line: POST /api/specials
 // Runs on Vercel's server, never in the browser, so the Gemini key stays
 // secret. It checks that the caller is signed in to The Line, then asks
-// Google Gemini for a weekly specials menu or a party menu built from the
-// restaurant's own ingredients, prices and use-by dates.
+// Google Gemini for a menu (weekly specials, a party, a game day or event,
+// or "anything goes") built from the restaurant's own ingredients, prices
+// and use-by dates. With { action: "image" } it asks Gemini's picture model
+// for a banner picture for a menu instead.
 //
 // Needs three environment variables in Vercel (Settings → Environment
 // Variables): GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY. Optional:
-// GEMINI_MODEL (defaults to Gemini 3.1 Flash-Lite).
+// GEMINI_MODEL (defaults to Gemini 3.1 Flash-Lite) and GEMINI_IMAGE_MODEL
+// (defaults to Gemini 2.5 Flash Image). Pictures need billing turned on
+// for the key in Google AI Studio.
 // =====================================================================
 "use strict";
 
 const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+const DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image";
 const MAX_BODY = 60000;   // characters; a restaurant's whole pantry fits easily
 
 module.exports = async function handler(req, res) {
@@ -38,14 +43,16 @@ module.exports = async function handler(req, res) {
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = null; } }
   if (!body || typeof body !== "object") return res.status(400).json({ error: "Nothing to work with." });
   if (JSON.stringify(body).length > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
+  if (body.action === "image") return makeImage(body, key, res);
   if (!Array.isArray(body.pantry) || !body.pantry.length) return res.status(400).json({ error: "Add some ingredients first." });
-  const mode = body.mode === "party" ? "party" : body.mode === "event" ? "event" : "weekly";
+  const mode = ["party", "event", "free"].includes(body.mode) ? body.mode : "weekly";
 
   // 3. Ask Gemini, with a fixed answer format.
   const payload = {
     systemInstruction: { parts: [{ text: SYSTEM }] },
     contents: [{ role: "user", parts: [{ text: buildRequest(mode, body) }] }],
-    generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA },
+    // A higher temperature so "Try another version" really is different.
+    generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 1.15 },
   };
   try {
     let model = String(process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
@@ -72,6 +79,56 @@ module.exports = async function handler(req, res) {
   }
 };
 
+// ---------------------------------------------------------------- pictures
+// A banner picture for the top of a menu, from Gemini's picture model.
+// Returns { image: "data:image/png;base64,..." }.
+async function makeImage(b, key, res) {
+  const m = b.menu || {};
+  const items = (Array.isArray(m.items) ? m.items : []).slice(0, 4).map((it) => `${clip(it.name, 80)} (${clip(it.description, 160)})`);
+  const colors = (Array.isArray(b.colors) ? b.colors : []).filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(0, 4);
+  const style = b.style === "illustration"
+    ? "A bold, friendly hand-drawn illustration with flat colors, like a screen-printed poster."
+    : "A bright, appetizing overhead food photograph on a rustic wooden pub table, natural light.";
+  const prompt = `${style}
+It goes across the top of a printed restaurant menu called "${clip(m.title, 80)}" for ${clip(b.occasion, 200) || "this week's specials"}.
+Show these dishes together: ${items.join("; ") || "the restaurant's specials"}.
+${clip(b.details, 400) ? `Fit this theme: ${clip(b.details, 400)}.` : ""}
+${colors.length ? `Use this color palette for props, napkins and the background: ${colors.join(", ")}.` : ""}
+Wide banner, 16:9. Leave a calm area with no clutter.
+Do not include any words, letters, numbers, logos, trademarks, team mascots or recognizable people.`;
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: "16:9" } },
+  };
+  try {
+    let model = String(process.env.GEMINI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL).trim();
+    let r = await callGemini(model, payload, key);
+    if (r.status === 404) {
+      const found = (await findModel(key, /flash.*image/i, model)) || (await findModel(key, /image/i, model));   // cheaper Flash first
+      if (found) { model = found; r = await callGemini(model, payload, key); }
+    }
+    if (r.status === 400) {   // an older picture model may not know the 16:9 setting
+      delete payload.generationConfig.imageConfig;
+      r = await callGemini(model, payload, key);
+    }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.error?.message || "");
+      if (r.status === 429 || /quota|billing|free tier/i.test(msg)) {
+        return res.status(429).json({ error: "Your Gemini key can't make pictures yet. Picture models need billing turned on for the key in Google AI Studio (aistudio.google.com, then Billing). Or click \"Add your own picture\"." });
+      }
+      if (r.status === 403 || /api key/i.test(msg)) return res.status(502).json({ error: "Gemini didn't accept the API key. Check GEMINI_API_KEY in Vercel's settings." });
+      return res.status(502).json({ error: msg || `Gemini returned an error (${r.status}).` });
+    }
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const pic = parts.map((p) => p.inlineData || p.inline_data).find((x) => x && x.data);
+    if (!pic) return res.status(422).json({ error: "Gemini didn't send back a picture. Try again, or pick the other picture style." });
+    return res.status(200).json({ model, image: `data:${pic.mimeType || pic.mime_type || "image/png"};base64,${pic.data}` });
+  } catch {
+    return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
+  }
+}
+
 function callGemini(model, payload, key) {
   return fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
@@ -80,14 +137,15 @@ function callGemini(model, payload, key) {
   });
 }
 
-// Lists the models this key can use and picks the newest Flash-Lite one.
-async function findFlashLite(key) {
+// Lists the models this key can use and picks the newest one whose name matches.
+const findFlashLite = (key) => findModel(key, /flash-lite/i);
+async function findModel(key, pattern, skip = "") {
   try {
     const r = await fetch(`${GEMINI}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
     if (!r.ok) return null;
     const { models = [] } = await r.json();
     const names = models
-      .filter((m) => /flash-lite/i.test(m.name) && (m.supportedGenerationMethods || []).includes("generateContent"))
+      .filter((m) => pattern.test(m.name) && m.name !== `models/${skip}` && (m.supportedGenerationMethods || []).includes("generateContent"))
       .map((m) => m.name.replace(/^models\//, ""));
     const version = (n) => Number((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
     names.sort((a, b) => version(b) - version(a) || (/preview|exp/.test(a) ? 1 : 0) - (/preview|exp/.test(b) ? 1 : 0));
@@ -97,28 +155,31 @@ async function findFlashLite(key) {
 
 const SYSTEM = `You help the owner of a small restaurant plan menus. Write the way a friendly, experienced chef-manager talks: short, plain sentences a high school student would understand. No buzzwords.
 
-Rules:
-- Build dishes from the restaurant's own ingredient list. You may also assume basic pantry staples (salt, pepper, cooking oil, flour, sugar, water). Do not invent other ingredients; if a dish truly needs one that isn't listed, put it in the ingredients list with "not_stocked": true.
-- Use up ingredients that are spoiling soon first, especially ones with a lot on hand.
+What matters, in this order:
+1. THE OWNER'S BRIEF. Build the whole menu around what the owner wrote: the occasion, the personal details and the notes. Treat every word as part of the brief, even random ones. If they throw in a mix of things ("tacos, 80s, grandma's 90th, rain"), weave all of them together into one menu with a clear idea, so it could only have been written for this request. Never fall back on a generic menu.
+2. Real food the kitchen can make from the ingredient list, priced to the food cost goal.
+3. Using up ingredients that spoil soon, wherever they fit the brief.
+
+Food rules:
+- Build dishes from the restaurant's own ingredient list. You may also assume basic pantry staples (salt, pepper, cooking oil, flour, sugar, water). If the brief truly needs an ingredient that isn't listed, include it with "not_stocked": true.
 - Keep each dish's food cost near the restaurant's goal food cost percent. Food cost = the cost of the ingredients in one portion divided by the menu price.
 - Give amounts per ONE portion, in the same unit the ingredient list uses.
 - Prices should fit this restaurant: look at its current menu prices.
-- Fit the style and cuisine of the restaurant's current menu.
 - "why" is one or two sentences: what it uses up and why it should sell or make money.
+- If you're given dishes to avoid, make different ones: new names, new ideas, a new angle on the brief.
 
-Theme (always fill in "theme" and "tagline"):
-- Design the printed menu's look to fit the occasion. For a game day or event, use that event's team or event colors (or the colors the owner asks for), give the menu a short rallying title (for example a friendly rivalry slogan), and give every dish a fun themed name that still says what the food is. Keep it good-natured: no insults, no team logos.
-- For a party, fit the occasion. For weekly specials, fit the season and this restaurant.
-- Colors are 6-digit hex codes like #FF8200. Pick a background and a text color that are easy to read together.
-
-Make it personal (this matters most):
+Make it personal:
 - Use the specific details of THIS occasion, not generic ones. For a sports team: its mascot, nicknames, stadium, traditions, colors and well-known sayings or chants (a few words each, never song lyrics beyond a short phrase). For a birthday: the person's name, age and what they love (a golf-themed 2nd birthday means golf carts, tees, putts, hole-in-one and "par-tee" jokes). For a wedding or anniversary: the couple's names and story.
 - Every dish name and description should connect to those details while still saying what the food is.
+- Give the menu a short title that fits the brief (a friendly rivalry slogan is fine for a game). Keep it good-natured: no insults.
 - "sayings": 2 to 4 short phrases to print on the menu (chants, slogans, birthday wishes, toasts).
 - "motifs": 2 to 4 picture names from this list that fit the occasion: football, basketball, baseball, paw, golf_ball, golf_flag, golf_cart, balloon, cake, party_hat, star, trophy, shamrock, pint, heart, rings, pumpkin, snowflake, music, sun, crown, flower, leaf.
-- "pattern": one of checkerboard, stripes, dots, none (checkerboard suits a team with checkerboard end zones or a race; dots suit a kid's party).
-- Do not use emoji anywhere.
-- Never describe or recreate a team's or company's logo artwork.`;
+- Do not use emoji anywhere. Never describe or recreate a team's or company's logo artwork.
+
+The look (always fill in "theme", "tagline" and "pattern"):
+- If the owner gives exact colors (hex codes), use ONLY those colors, plus white or near-black if you need them for readable text. Decide which one is the background and which are the title and details.
+- Otherwise pick colors that fit the occasion: a team's real colors, a party's theme, or the season. Colors are 6-digit hex codes like #FF8200. The background and text must be easy to read together.
+- "pattern" is the border strip along the top and bottom. Choose what fits THIS occasion, and choose "none" when nothing fits: "none" suits most weekly specials and anything elegant. stripes = sporty or classic diner, dots = kids and playful parties, confetti = birthdays and celebrations, zigzag = retro, loud or fun, waves = summer, beach or seafood, checkerboard ONLY for something truly checkered (racing, a stadium with checkerboard end zones, a retro diner floor).`;
 
 function buildRequest(mode, b) {
   const pantry = b.pantry.slice(0, 250).map((i) => {
@@ -131,25 +192,32 @@ function buildRequest(mode, b) {
     `- ${d.name} (${d.category || "uncategorized"}) | $${Number(d.price).toFixed(2)} | food cost ${Number(d.food_cost_pct).toFixed(1)}% | sold ${d.weekly_units ?? "?"} last week`).join("\n");
   const t = b.targets || {};
   let ask;
-  if (mode === "party") {
+  if (mode === "free") {
+    ask = `Plan a menu of ${Math.min(8, Math.max(2, num(b.count, 4)))} items built entirely around the owner's brief below. Work out the occasion and the feel from it, then make every item, the title and the look fit it.
+THE OWNER'S BRIEF: ${clip(b.brief, 800) || "surprise me with something fun and seasonal"}`;
+  } else if (mode === "party") {
     const p = b.party || {};
     ask = `Plan a party menu for: ${clip(p.type) || "a group"}.
 Guests: ${num(p.guests, 20)}. Service style: ${clip(p.style) || "sit-down"}.
 Make 4 to 6 items across courses (for example: starter, main, side, dessert). Give every item its own menu price, priced like the regular menu. Do not set a price per person.
-Personal details: ${clip(p.personal) || "none given; use the type of group"}
-Notes from the owner: ${clip(p.notes) || "none"}`;
+Personal details: ${clip(p.personal, 600) || "none given; use the type of group"}
+Notes from the owner: ${clip(p.notes, 600) || "none"}`;
   } else if (mode === "event") {
     const e = b.event || {};
     ask = `Plan a game day / event menu for: ${clip(e.name) || "a big game"}.
-Colors the owner wants: ${clip(e.colors) || "the event's or teams' usual colors"}.
 Make ${Math.min(8, Math.max(2, num(e.count, 5)))} items guests can order: shareable snacks, a couple of mains, and a drink or dessert idea if it fits. Price them like the regular menu.
 Expected crowd: ${clip(e.crowd) || "busier than usual"}.
-Personal details: ${clip(e.personal) || "none given; use what you know about the event"}
-Notes from the owner: ${clip(e.notes) || "none"}`;
+Personal details: ${clip(e.personal, 600) || "none given; use what you know about the event"}
+Notes from the owner: ${clip(e.notes, 600) || "none"}`;
   } else {
     ask = `Plan ${Math.min(6, Math.max(1, num(b.count, 3)))} weekly specials to run alongside the regular menu.
-Notes from the owner: ${clip(b.notes) || "none"}`;
+Notes from the owner: ${clip(b.notes, 600) || "none; pick a fresh angle, such as the season, a holiday this week or a mood"}`;
   }
+  const hex = (Array.isArray(b.colors_hex) ? b.colors_hex : []).filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(0, 6);
+  const colors = hex.length
+    ? `Colors: the owner asked for "${clip(b.colors, 120)}". Use exactly these hex codes: ${hex.join(", ")}.`
+    : clip(b.colors, 120) ? `Colors the owner wants: ${clip(b.colors, 120)}.` : "Colors: none given; choose what fits the brief.";
+  const avoid = (Array.isArray(b.avoid) ? b.avoid : []).map((x) => clip(x, 80)).filter(Boolean).slice(0, 24);
   return `Restaurant: ${clip(b.restaurant) || "our restaurant"}. Today is ${clip(b.today)}.
 Food cost goal: ${t.mid ?? 31}% (comfortable range ${t.low ?? 28}% to ${t.high ?? 34}%).
 
@@ -159,10 +227,12 @@ ${pantry}
 Current menu (name | price | food cost | sales):
 ${menu || "- (none yet)"}
 
-${ask}`;
+${ask}
+${colors}
+${avoid.length ? `Dishes already suggested (make different ones): ${avoid.join("; ")}` : ""}`;
 }
 
-const clip = (s) => String(s ?? "").slice(0, 300).replace(/\s+/g, " ").trim();
+const clip = (s, max = 300) => String(s ?? "").slice(0, max).replace(/\s+/g, " ").trim();
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : d; };
 
 // The answer format Gemini must follow.
@@ -201,7 +271,7 @@ const SCHEMA = {
     tagline: { type: "STRING", description: "A short line printed under the title on the menu" },
     sayings: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 short phrases printed on the menu" },
     motifs: { type: "ARRAY", items: { type: "STRING" }, description: "2 to 4 picture names from the allowed list" },
-    pattern: { type: "STRING", description: "Border pattern: checkerboard, stripes, dots or none" },
+    pattern: { type: "STRING", enum: ["none", "stripes", "dots", "confetti", "zigzag", "waves", "checkerboard"], description: "Border strip; none unless a pattern fits this occasion" },
     theme: {
       type: "OBJECT",
       description: "The printed menu's look",
@@ -215,5 +285,5 @@ const SCHEMA = {
       required: ["background", "text", "accent", "style"],
     },
   },
-  required: ["title", "items"],
+  required: ["title", "items", "theme", "pattern"],
 };

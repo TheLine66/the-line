@@ -253,10 +253,16 @@ Your key is like a password. **Never** put it in a file, in GitHub, or in a chat
 3. Go to **Deployments**, click the **⋯** next to the newest one, and choose **Redeploy**. Vercel only picks up new settings on a fresh deploy.
 
 ### Step C: Use it
-Open **Specials**, pick **Weekly specials** or **Party or group menu**, fill in the boxes, and click **Make the menu**. It takes a few seconds. Don't like it? Click **Try another version**. **Print / save as PDF** gives you a clean copy.
+Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day / event** or **Anything goes**, fill in the boxes, and click **Make the menu**. It takes a few seconds. Don't like it? Click **Try another version**: it's told what it already suggested, so you get new dishes. **Print the menu** gives you a clean copy.
+
+- **Anything goes:** throw in any mix of words ("tacos, 80s, grandma Rose turns 90, rain") and it builds one menu around all of them.
+- **Colors:** type them in plain words or hex codes ("orange and white", "navy and gold", "#FF8200"). The app turns them into exact colors and keeps the menu to those colors (plus white or black for readable text), so they come out the same every time.
+- **Change the look yourself:** under the menu, pick the background, text and title colors and the border (none, stripes, dots, confetti, zigzag, waves or checkerboard). **Back to Gemini's look** undoes it.
+- **Pictures:** **Make a picture with Gemini** draws a banner (food photo or illustration) for the top of the menu. It never draws words, logos or mascots. **Add your own picture** uses a photo from your computer instead.
 
 - **Which model:** it uses Gemini 3.1 Flash-Lite. If Google names it differently for your key, the helper finds your Flash-Lite model by itself. To pick a specific model, add a fourth variable, `GEMINI_MODEL`, with the model's name.
 - **If it says "isn't connected yet":** one of the three variables is missing, or you haven't redeployed since adding them.
+- **Pictures need billing:** Google's picture model only works once billing is turned on for your key (Google AI Studio → **Billing**). Each picture costs about 4 cents. Until then the button explains this, and **Add your own picture** still works. To pick a specific picture model, add `GEMINI_IMAGE_MODEL`.
 - **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.
 - **Always look it over:** the AI can suggest odd pairings, or ingredients you don't stock (the page flags those).
 
