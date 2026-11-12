@@ -1,7 +1,7 @@
 {
   "name": "The Line",
   "short_name": "The Line",
-  "description": "Slowing down the rush",
+  "description": "Slowing Down the Rush",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
