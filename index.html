@@ -107,7 +107,7 @@
         <button class="brand-home" id="brandHome" type="button" aria-label="Go to Tonight"></button>
         <span class="brand-mark"></span>
         <div>
-          <h1 class="wordmark" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span></h1>
+          <h1 class="wordmark splice" id="headerLogo" aria-label="The Line"><span class="wm-top" aria-hidden="true">The Line</span><span class="wm-bot" aria-hidden="true">The Line</span><i class="wm-blade" aria-hidden="true"></i></h1>
           <div class="sub">Slowing Down the Rush</div>
         </div>
       </div>
@@ -211,15 +211,10 @@
       <div class="callout" id="callout"></div>
       <div class="chart-card">
         <div class="chart-head">
-          <h3>Popularity vs. profitability</h3>
-          <span class="note">Bubble size = weekly revenue · color = food cost status</span>
+          <h3>Menu Matrix: What To Do With Each Dish</h3>
+          <span class="note" id="matrixNote"></span>
         </div>
         <div id="quadrantChart"></div>
-        <div class="legend">
-          <span class="sw"><span class="dotlg" style="background:var(--sage)"></span> On target</span>
-          <span class="sw"><span class="dotlg" style="background:var(--amber)"></span> Trending high</span>
-          <span class="sw"><span class="dotlg" style="background:var(--rust)"></span> Over target</span>
-        </div>
       </div>
       <div class="chart-card">
         <div class="chart-head"><h3>Dish performance, ranked by weekly margin $</h3></div>
@@ -266,8 +261,21 @@
   <!-- Ingredients -->
   <div class="page" id="page-ingredients">
     <div class="perf-wrap">
+      <div class="chart-card" id="invoiceCard">
+        <div class="chart-head"><h3>Scan an Invoice</h3><span class="note">Snap a photo of a delivery invoice. Gemini reads the costs, amounts and shelf life. You check everything before it saves.</span></div>
+        <div class="row-actions">
+          <label class="applybtn pic-btn" id="invoiceBtn">Snap or upload an invoice<input type="file" id="invoiceFile" accept="image/*,application/pdf" hidden></label>
+          <span class="note" id="invoiceNote"></span>
+        </div>
+        <div class="blade-track menu-wait hidden" id="invoiceBlade" aria-hidden="true"></div>
+        <div id="invoiceResult"></div>
+      </div>
+      <div class="chart-card hidden" id="card86">
+        <div class="chart-head"><h3>86'd Right Now</h3><span class="note">These show up on tonight's MOD Report on their own</span></div>
+        <div id="list86"></div>
+      </div>
       <div class="chart-card">
-        <div class="chart-head"><h3>Add an ingredient</h3></div>
+        <div class="chart-head"><h3>Add an Ingredient</h3></div>
         <form class="toolbar" id="addIngForm">
           <label class="stack">Name<input id="newIngName" required maxlength="100" placeholder="e.g. Short rib"></label>
           <label class="stack">Unit<input id="newIngUnit" required maxlength="20" value="oz" list="unitList" class="short"></label>
@@ -280,8 +288,8 @@
       </div>
       <div class="chart-card">
         <div class="chart-head">
-          <h3>Ingredient prices</h3>
-          <span class="note">Change a price and click away. It saves on its own.</span>
+          <h3>Ingredient Prices</h3>
+          <span class="note">Change a price and click away. It saves on its own. Tap 86 when you run out.</span>
         </div>
         <div class="toolbar"><input id="ingSearch" type="search" placeholder="Search ingredients…" class="search"></div>
         <div class="scroll-x"><table class="edit" id="ingTable"></table></div>
@@ -316,7 +324,7 @@
           <label>How many specials
             <select id="spCount"><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
           </label>
-          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="spNotes" maxlength="600" placeholder="e.g. Make one vegetarian. Nothing fried."><button type="button" class="ghostbtn mic-btn" data-voice-for="spNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
+          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="spNotes" maxlength="600" placeholder="e.g. Make one vegetarian. Nothing fried."><button type="button" class="ghostbtn mic-btn" data-voice-for="spNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
         </div>
         <div class="form-grid hidden" id="partyFields">
           <label>Type of group<input id="ptType" maxlength="80" placeholder="e.g. Birthday dinner, office lunch"></label>
@@ -324,8 +332,8 @@
           <label>Style
             <select id="ptStyle"><option>Sit-down, plated</option><option>Family style</option><option>Buffet</option><option>Passed appetizers</option></select>
           </label>
-          <label class="wide">Make it personal (optional)<span class="voice-field"><input id="ptPersonal" maxlength="600" placeholder="e.g. Jack is turning 2 and loves golf carts and golf balls"><button type="button" class="ghostbtn mic-btn" data-voice-for="ptPersonal" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
-          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="ptNotes" maxlength="600" placeholder="e.g. Two guests are vegetarian. No nuts."><button type="button" class="ghostbtn mic-btn" data-voice-for="ptNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
+          <label class="wide">Make it personal (optional)<span class="voice-field"><input id="ptPersonal" maxlength="600" placeholder="e.g. Jack is turning 2 and loves golf carts and golf balls"><button type="button" class="ghostbtn mic-btn" data-voice-for="ptPersonal" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
+          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="ptNotes" maxlength="600" placeholder="e.g. Two guests are vegetarian. No nuts."><button type="button" class="ghostbtn mic-btn" data-voice-for="ptNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
         </div>
         <div class="form-grid hidden" id="eventFields">
           <label class="wide">What's the event?<input id="evName" maxlength="120" placeholder="e.g. Tennessee vs. Kentucky, Saturday 7 PM"></label>
@@ -333,24 +341,27 @@
             <select id="evCount"><option>3</option><option>4</option><option selected>5</option><option>6</option><option>8</option></select>
           </label>
           <label>Expected crowd (optional)<input id="evCrowd" maxlength="80" placeholder="e.g. Packed bar, 150 guests"></label>
-          <label class="wide">Make it personal (optional)<span class="voice-field"><input id="evPersonal" maxlength="600" placeholder="e.g. Smokey, the Power T, checkerboard end zones, &ldquo;Go Vols&rdquo;"><button type="button" class="ghostbtn mic-btn" data-voice-for="evPersonal" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
-          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="evNotes" maxlength="600" placeholder="e.g. Lots of shareable plates. One vegetarian option."><button type="button" class="ghostbtn mic-btn" data-voice-for="evNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
+          <label class="wide">Make it personal (optional)<span class="voice-field"><input id="evPersonal" maxlength="600" placeholder="e.g. Smokey, the Power T, checkerboard end zones, &ldquo;Go Vols&rdquo;"><button type="button" class="ghostbtn mic-btn" data-voice-for="evPersonal" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
+          <label class="wide">Anything to keep in mind (optional)<span class="voice-field"><input id="evNotes" maxlength="600" placeholder="e.g. Lots of shareable plates. One vegetarian option."><button type="button" class="ghostbtn mic-btn" data-voice-for="evNotes" aria-pressed="false" aria-label="Speak your notes instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
         </div>
         <div class="form-grid hidden" id="freeFields">
-          <label class="wide">Throw in anything<span class="voice-field"><textarea id="fsBrief" rows="3" maxlength="800" placeholder="e.g. Rainy Tuesday, 80s movie night, grandma Rose turns 90, she loves lemon and Elvis. Or just: tacos, hockey, pickles."></textarea><button type="button" class="ghostbtn mic-btn" data-voice-for="fsBrief" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span class="mic-text">Speak</span></button></span></label>
+          <label class="wide">Throw in anything<span class="voice-field"><textarea id="fsBrief" rows="3" maxlength="800" placeholder="e.g. Rainy Tuesday, 80s movie night, grandma Rose turns 90, she loves lemon and Elvis. Or just: tacos, hockey, pickles."></textarea><button type="button" class="ghostbtn mic-btn" data-voice-for="fsBrief" aria-pressed="false" aria-label="Speak instead of typing" hidden><svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button></span></label>
           <label>How many items
             <select id="fsCount"><option>3</option><option selected>4</option><option>5</option><option>6</option><option>8</option></select>
           </label>
         </div>
         <div class="form-grid">
-          <label class="wide">Colors (optional)<input id="menuColors" maxlength="120" placeholder="e.g. Orange and white, navy and gold, or #FF8200 and #58595B"></label>
+          <label class="wide">Colors (optional)<input id="menuColors" maxlength="120" placeholder="Leave blank for a team's real colors, or type e.g. orange and white, #FF8200"></label>
+          <div class="wide color-preview" id="colorPreview" aria-live="polite"></div>
         </div>
         <div class="row-actions">
           <button class="applybtn" id="makeMenuBtn" type="button">Make the menu</button>
+          <button class="ghostbtn dark" id="ideasBtn" type="button">Show me 3 ideas first</button>
           <span class="note" id="makeMenuNote"></span>
         </div>
         <div class="blade-track menu-wait hidden" id="makeMenuBlade" aria-hidden="true"></div>
       </div>
+      <div class="chart-card hidden" id="ideasResult"></div>
       <div class="chart-card hidden" id="menuResult"></div>
       <div class="chart-card">
         <div class="chart-head"><h3>Spoiling soon</h3><span class="note">From the "Use by" dates on the Ingredients tab</span></div>
@@ -437,7 +448,7 @@
     </main>
   </div>
 
-  <footer>The Line · FinTech @ Rocky Top Lightning Demo · Group 66</footer>
+  <footer>The Line | FinTech @ Rocky Top Final Demo | Group 66</footer>
 </div>
 
 <!-- ============ Settings dialog ============ -->

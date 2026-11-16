@@ -4,21 +4,26 @@
 // secret. It checks that the caller is signed in to The Line, then asks
 // Google Gemini for a menu (weekly specials, a party, a game day or event,
 // or "anything goes") built from the restaurant's own ingredients, prices
-// and use-by dates. With { action: "image" } it asks Gemini's picture model
-// for a banner picture for a menu instead.
+// and use-by dates. Before writing an occasion menu it looks the occasion up
+// with Google Search, so team colors, mascots and sayings are real.
+// Other actions: { action: "ideas" } gives 3 menu ideas to choose from,
+// { action: "image" } draws a banner picture, and { action: "invoice" }
+// reads a photo of a supplier invoice into ingredient lines.
 //
 // Needs three environment variables in Vercel (Settings → Environment
 // Variables): GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY. Optional:
-// GEMINI_MODEL (defaults to Gemini 3.1 Flash-Lite) and GEMINI_IMAGE_MODEL
+// GEMINI_MODEL (defaults to Gemini 3 Flash) and GEMINI_IMAGE_MODEL
 // (defaults to Gemini 2.5 Flash Image). Pictures need billing turned on
 // for the key in Google AI Studio.
 // =====================================================================
 "use strict";
 
 const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+// Flash (not Flash-Lite): better at facts, team colors and reading invoices.
+const DEFAULT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image";
-const MAX_BODY = 60000;   // characters; a restaurant's whole pantry fits easily
+const MAX_BODY = 60000;          // characters; a restaurant's whole pantry fits easily
+const MAX_INVOICE = 4200000;     // an invoice photo, already shrunk in the browser (Vercel's limit is 4.5 MB)
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST." });
@@ -42,25 +47,32 @@ module.exports = async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = null; } }
   if (!body || typeof body !== "object") return res.status(400).json({ error: "Nothing to work with." });
-  if (JSON.stringify(body).length > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
+  const size = JSON.stringify(body).length;
+  if (body.action === "invoice") {
+    if (size > MAX_INVOICE) return res.status(413).json({ error: "That picture is too big. Try a closer, smaller photo." });
+    return readInvoice(body, key, res);
+  }
+  if (size > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
   if (body.action === "image") return makeImage(body, key, res);
   if (!Array.isArray(body.pantry) || !body.pantry.length) return res.status(400).json({ error: "Add some ingredients first." });
   const mode = ["party", "event", "free"].includes(body.mode) ? body.mode : "weekly";
 
-  // 3. Ask Gemini, with a fixed answer format.
-  const payload = {
-    systemInstruction: { parts: [{ text: SYSTEM }] },
-    contents: [{ role: "user", parts: [{ text: buildRequest(mode, body) }] }],
-    // A higher temperature so "Try another version" really is different.
-    generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 1.15 },
-  };
+  const ideas = body.action === "ideas";
   try {
-    let model = String(process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
+    let model = await pickModel(key);
+    // 3. Look the occasion up first (team colors, mascots, sayings, theme ideas).
+    const research = await lookUp(mode, body, key, model);
+    // 4. Ask Gemini for the menu (or 3 ideas), with a fixed answer format.
+    let ask = buildRequest(mode, body);
+    if (research.facts) ask += `\n\nFACTS FROM A GOOGLE SEARCH (more accurate than memory; use them, especially exact team colors):\n${research.facts}`;
+    if (ideas) ask += `\n\nDon't write the menu yet. Give 3 clearly different ideas for it: different themes, angles or styles, each one specific to this request.`;
+    const payload = {
+      systemInstruction: { parts: [{ text: SYSTEM }] },
+      contents: [{ role: "user", parts: [{ text: ask }] }],
+      // Gemini 3 works best at its default temperature (1.0); the "avoid" list keeps versions different.
+      generationConfig: { responseMimeType: "application/json", responseSchema: ideas ? IDEAS_SCHEMA : SCHEMA },
+    };
     let r = await callGemini(model, payload, key);
-    if (r.status === 404) {   // that model name isn't available: find this key's Flash-Lite model
-      const found = await findFlashLite(key);
-      if (found) { model = found; r = await callGemini(model, payload, key); }
-    }
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = String(data?.error?.message || "");
@@ -72,8 +84,12 @@ module.exports = async function handler(req, res) {
     const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
     let menu;
     try { menu = JSON.parse(text); } catch { return res.status(502).json({ error: "Gemini's answer came back garbled. Try again." }); }
+    if (ideas) {
+      if (!menu || !Array.isArray(menu.ideas) || !menu.ideas.length) return res.status(502).json({ error: "Gemini didn't come up with ideas. Try again." });
+      return res.status(200).json({ mode, model, ideas: menu.ideas.slice(0, 3), sources: research.sources });
+    }
     if (!menu || !Array.isArray(menu.items) || !menu.items.length) return res.status(502).json({ error: "Gemini didn't suggest any dishes. Try again." });
-    return res.status(200).json({ mode, model, menu });
+    return res.status(200).json({ mode, model, menu, sources: research.sources });
   } catch {
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
   }
@@ -124,6 +140,96 @@ Do not include any words, letters, numbers, logos, trademarks, team mascots or r
     const pic = parts.map((p) => p.inlineData || p.inline_data).find((x) => x && x.data);
     if (!pic) return res.status(422).json({ error: "Gemini didn't send back a picture. Try again, or pick the other picture style." });
     return res.status(200).json({ model, image: `data:${pic.mimeType || pic.mime_type || "image/png"};base64,${pic.data}` });
+  } catch {
+    return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
+  }
+}
+
+// The text model: GEMINI_MODEL if set, else Gemini 3 Flash. If Google
+// names it differently for this key, use the newest Flash, then Flash-Lite.
+let modelCache = null;
+async function pickModel(key) {
+  const want = String(process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
+  if (modelCache?.want === want) return modelCache.model;
+  let model = want;
+  try {
+    const r = await fetch(`${GEMINI}/models/${encodeURIComponent(want)}`, { headers: { "x-goog-api-key": key } });
+    if (r.status === 404) model = (await findModel(key, /gemini-[\d.]+-flash(-preview|-latest|-\d+)?$/i)) || (await findFlashLite(key)) || want;
+  } catch { /* use what was asked for */ }
+  modelCache = { want, model };
+  return model;
+}
+
+// A quick Google Search for the facts that make an occasion menu accurate.
+// Returns { facts, sources }; on any problem it returns nothing and the menu
+// is written without it.
+async function lookUp(mode, b, key, model) {
+  const about = mode === "event" ? `${clip(b.event?.name)}. ${clip(b.event?.personal, 400)}`
+    : mode === "party" ? `${clip(b.party?.type)}. ${clip(b.party?.personal, 400)}`
+    : mode === "free" ? clip(b.brief, 600)
+    : clip(b.notes, 400);
+  if (!about.replace(/[.\s]/g, "")) return { facts: "", sources: [] };
+  const prompt = `I'm planning a themed menu at a small restaurant (${clip(b.restaurant)}, today is ${clip(b.today)}) for: ${about}
+Look up and list the facts that would make it accurate and personal. Short bullet points, under 180 words, facts only:
+- Every sports team mentioned: its official colors with hex codes, mascot, nicknames, stadium, best-known chants or slogans, and the home city's famous foods. If a game is named, the date and where it's played.
+- A birthday, holiday or theme: what kids or guests that age love about it, real details of the theme (for golf: carts, tees, flags, holes-in-one), and the usual colors.
+- Anything else mentioned that you can check (a band, a movie, a place, a decade).`;
+  try {
+    const r = await callGemini(model, { contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }, key);
+    if (!r.ok) return { facts: "", sources: [] };
+    const data = await r.json();
+    const cand = data?.candidates?.[0];
+    const facts = (cand?.content?.parts || []).map((p) => p.text || "").join("").trim().slice(0, 2500);
+    const sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => c.web).filter((w) => w && w.uri)
+      .slice(0, 4).map((w) => ({ title: String(w.title || "").slice(0, 80), uri: w.uri }));
+    return { facts, sources };
+  } catch { return { facts: "", sources: [] }; }
+}
+
+// ---------------------------------------------------------------- invoices
+// Reads a photo (or PDF) of a supplier invoice into ingredient lines, matched
+// to the restaurant's own ingredient names and units where it can.
+async function readInvoice(b, key, res) {
+  const mime = String(b.mime || "");
+  if (!/^(image\/(jpeg|png|webp|heic|heif)|application\/pdf)$/.test(mime) || typeof b.data !== "string" || !b.data) {
+    return res.status(400).json({ error: "Send a photo (JPG or PNG) or a PDF of the invoice." });
+  }
+  const ours = (Array.isArray(b.ingredients) ? b.ingredients : []).slice(0, 300)
+    .map((i) => `- ${clip(i.name, 100)} (${clip(i.unit, 20)}, now $${Number(i.cost || 0).toFixed(2)} per ${clip(i.unit, 20)})`).join("\n");
+  const prompt = `This is a supplier invoice or delivery receipt for a restaurant (from a food distributor like Sysco or US Foods, a bar or liquor supplier, a produce company or similar). Today is ${clip(b.today)}.
+Read every product line. Skip taxes, fuel surcharges, delivery fees, deposits and credits.
+
+Our ingredient list (name, the unit we cost it in, current cost):
+${ours || "- (empty)"}
+
+For each product line:
+- "name": a short, plain ingredient name. If it is the same product as one on our list, set "existing" to that exact name from our list and use it as "name" too. Otherwise leave "existing" empty.
+- "unit" and the numbers: if it matches one of ours, convert to OUR unit (1 lb = 16 oz, 1 kg = 35.27 oz, 1 gal = 128 fl oz, 1 case = the count or weight printed on the line). Otherwise pick a sensible unit (oz, lb, each, fl oz, gal, bottle).
+- "quantity": how much was delivered, in that unit.
+- "unit_cost": the price per ONE of that unit (line total divided by quantity), in dollars.
+- "line_total": the line's total in dollars as printed.
+- "shelf_life_days": how many days it usually keeps from delivery, stored properly (fresh fish 2, fresh meat 4, leafy greens 5, other produce 7, dairy 10, eggs 21, frozen 90, dry goods and canned 180, beer 120, wine and liquor 365).
+- "confidence": "high" if the line was easy to read, otherwise "low".
+Also give the supplier's name and the invoice date (YYYY-MM-DD) if they're printed.`;
+  const payload = {
+    contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime, data: b.data } }, { text: prompt }] }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: INVOICE_SCHEMA },
+  };
+  try {
+    const model = await pickModel(key);
+    const r = await callGemini(model, payload, key);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.error?.message || "");
+      if (r.status === 429) return res.status(429).json({ error: "Gemini is busy or out of quota. Try again in a minute." });
+      if (r.status === 403 || /api key/i.test(msg)) return res.status(502).json({ error: "Gemini didn't accept the API key. Check GEMINI_API_KEY in Vercel's settings." });
+      return res.status(502).json({ error: msg || `Gemini returned an error (${r.status}).` });
+    }
+    const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    let inv;
+    try { inv = JSON.parse(text); } catch { return res.status(502).json({ error: "Couldn't read that invoice. Try a clearer, straight-on photo." }); }
+    if (!inv || !Array.isArray(inv.items) || !inv.items.length) return res.status(422).json({ error: "No product lines found. Try a clearer, straight-on photo of the whole invoice." });
+    return res.status(200).json({ model, invoice: inv });
   } catch {
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
   }
@@ -218,6 +324,8 @@ Notes from the owner: ${clip(b.notes, 600) || "none; pick a fresh angle, such as
     ? `Colors: the owner asked for "${clip(b.colors, 120)}". Use exactly these hex codes: ${hex.join(", ")}.`
     : clip(b.colors, 120) ? `Colors the owner wants: ${clip(b.colors, 120)}.` : "Colors: none given; choose what fits the brief.";
   const avoid = (Array.isArray(b.avoid) ? b.avoid : []).map((x) => clip(x, 80)).filter(Boolean).slice(0, 24);
+  const teams = (Array.isArray(b.teams) ? b.teams : []).slice(0, 4).map((t) => `${clip(t.name, 40)}: ${(Array.isArray(t.colors) ? t.colors : []).slice(0, 4).map((c) => clip(c, 30)).join(", ")}`);
+  const idea = b.idea && typeof b.idea === "object" ? `THE OWNER PICKED THIS IDEA. Build the menu around it: "${clip(b.idea.title, 100)}": ${clip(b.idea.pitch, 400)}${Array.isArray(b.idea.dishes) ? ` Dishes to start from: ${b.idea.dishes.slice(0, 8).map((x) => clip(x, 80)).join("; ")}.` : ""}` : "";
   return `Restaurant: ${clip(b.restaurant) || "our restaurant"}. Today is ${clip(b.today)}.
 Food cost goal: ${t.mid ?? 31}% (comfortable range ${t.low ?? 28}% to ${t.high ?? 34}%).
 
@@ -228,12 +336,62 @@ Current menu (name | price | food cost | sales):
 ${menu || "- (none yet)"}
 
 ${ask}
+${idea}
+${teams.length ? `Teams and their official colors: ${teams.join(" | ")}. Theme the menu for the first team named unless the owner says otherwise.` : ""}
 ${colors}
 ${avoid.length ? `Dishes already suggested (make different ones): ${avoid.join("; ")}` : ""}`;
 }
 
 const clip = (s, max = 300) => String(s ?? "").slice(0, max).replace(/\s+/g, " ").trim();
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : d; };
+
+// 3 ideas to choose from before writing a whole menu.
+const IDEAS_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    ideas: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          title: { type: "STRING", description: "The menu's name for this idea" },
+          pitch: { type: "STRING", description: "Two plain sentences: the theme and why guests will love it" },
+          dishes: { type: "ARRAY", items: { type: "STRING" }, description: "3 to 5 dish names with a few words each" },
+          colors: { type: "ARRAY", items: { type: "STRING" }, description: "2 or 3 hex colors for this idea" },
+          decor: { type: "STRING", description: "One sentence of table or decoration ideas, for parties and events" },
+        },
+        required: ["title", "pitch", "dishes"],
+      },
+    },
+  },
+  required: ["ideas"],
+};
+
+const INVOICE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    supplier: { type: "STRING" },
+    invoice_date: { type: "STRING", description: "YYYY-MM-DD, empty if not printed" },
+    items: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          existing: { type: "STRING", description: "Exact name from our ingredient list, or empty" },
+          unit: { type: "STRING" },
+          quantity: { type: "NUMBER" },
+          unit_cost: { type: "NUMBER" },
+          line_total: { type: "NUMBER" },
+          shelf_life_days: { type: "NUMBER" },
+          confidence: { type: "STRING", enum: ["high", "low"] },
+        },
+        required: ["name", "unit", "quantity", "unit_cost"],
+      },
+    },
+  },
+  required: ["items"],
+};
 
 // The answer format Gemini must follow.
 const SCHEMA = {

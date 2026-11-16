@@ -260,7 +260,10 @@ Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day
 - **Change the look yourself:** under the menu, pick the background, text and title colors and the border (none, stripes, dots, confetti, zigzag, waves or checkerboard). **Back to Gemini's look** undoes it.
 - **Pictures:** **Make a picture with Gemini** draws a banner (food photo or illustration) for the top of the menu. It never draws words, logos or mascots. **Add your own picture** uses a photo from your computer instead.
 
-- **Which model:** it uses Gemini 3.1 Flash-Lite. If Google names it differently for your key, the helper finds your Flash-Lite model by itself. To pick a specific model, add a fourth variable, `GEMINI_MODEL`, with the model's name.
+- **Which model:** it uses Gemini 3 Flash (stronger than Flash-Lite at facts and reading invoices). If Google names it differently for your key, the helper finds your newest Flash model by itself. To pick a specific model, add a fourth variable, `GEMINI_MODEL`, with the model's name.
+- **Accurate occasions:** before writing a game day, party or "anything goes" menu, it looks the occasion up with Google Search (team colors, mascots, chants, theme details) and shows the sources under the menu. Every NFL and SEC team's official colors are also built in: leave Colors blank, name the team, and the swatches appear.
+- **Show me 3 ideas first:** gives three different directions to pick from, each with dishes and colors, before writing the full menu.
+- **Scan an invoice (Ingredients tab):** snap a photo of a Sysco, produce or bar invoice. Gemini reads each line's cost, amount and shelf life, matches it to your ingredients, and you check and edit everything before it saves.
 - **If it says "isn't connected yet":** one of the three variables is missing, or you haven't redeployed since adding them.
 - **Pictures need billing:** Google's picture model only works once billing is turned on for your key (Google AI Studio → **Billing**). Each picture costs about 4 cents. Until then the button explains this, and **Add your own picture** still works. To pick a specific picture model, add `GEMINI_IMAGE_MODEL`.
 - **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.

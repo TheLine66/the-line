@@ -190,6 +190,8 @@ let laborWeek = null;          // week shown on the Labor Costs tab
 let laborRaise = { dept: "all", pct: 0 };  // what-if wage change (not saved)
 let editingReportId = null;    // MOD Report ("new" for a new report)
 let modDraft = null;           // working copy of the report being edited
+let modOpen = new Set(["sales"]);   // MOD report sections that are opened
+let modEditing = new Set();          // MOD report sections being edited
 let modAutoPull = false;       // pull POS numbers into the report once it's on screen
 let modPosNote = "";           // what the last POS pull did, shown under the button
 let modDirty = false;
@@ -253,7 +255,8 @@ async function handleSession(session) {
   user = session?.user || null;
   rest = null;
   resetWhatIf();
-  if (!user) { show("authScreen"); return; }
+  activePage = "home";                                 // every sign-in opens on Tonight
+  if (!user) { safeSet(TABS_KEY, "[]"); show("authScreen"); return; }   // signed out: no tabs kept
   $("userEmail").textContent = user.email || "";
   try { await loadRestaurants(); }
   catch (e) { console.error(e); show("onboardScreen"); $("onboardMsg").textContent = friendlyError(e); }
@@ -280,9 +283,10 @@ async function selectRestaurant(id) {
   lastMenu = null;
   await loadRestaurantData();
   renderRestaurantSelect();
-  if (!pinnedTabs().length) activePage = "home";     // nothing pinned: open on Tonight
+  const opening = $("appScreen").classList.contains("hidden");
   show("appScreen");
   render();
+  if (opening) playLogoSplice($("headerLogo"));      // the blade cut, every time the app opens
 }
 
 async function loadRestaurantData() {
@@ -606,7 +610,7 @@ function renderDishList() {
     const st = statusOf(pct);
     return `<button type="button" class="dish-row ${d.id === selectedDishId ? "selected" : ""}" data-id="${d.id}">
         <span class="dot ${st}"></span>
-        <span class="info"><span class="name">${esc(d.name)}</span><span class="cat">${esc(d.category || "Uncategorized")} · ${fmt(d.price)}</span></span>
+        <span class="info"><span class="name">${esc(d.name)}</span></span>
         <span class="pct mono ${st === "red" ? "up" : ""}">${fmtPct(pct)}</span>
       </button>`;
   }).join("");
@@ -690,7 +694,7 @@ function renderPanel() {
 
   el.innerHTML = `
     <div class="panel-head">
-      <div><h2>${esc(dish.name)}</h2><div class="cat">${esc(dish.category || "Uncategorized")} · Menu price ${fmt(dish.price)} · ${soldText}</div></div>
+      <div><h2>${esc(dish.name)}</h2><div class="cat">${esc(dish.category || "Uncategorized")} | Menu price ${fmt(dish.price)} | ${soldText}</div></div>
       <span class="status-chip ${st}">${statusLabel(st)}</span>
     </div>
     <div class="cost-summary">
@@ -754,54 +758,36 @@ function renderPerf() {
   renderPerfTable(byMargin, totalMargin, avgUnits, avgMargin);
 }
 
+// The menu matrix as four labeled boxes instead of a scatter plot, so it
+// reads in five seconds: which box a dish is in, and what to do about it.
+// Right column = sells more than the average dish; top row = earns more
+// per plate than the average dish.
+const QUADS = {
+  puzzle:    { name: "Puzzles",    what: "Profitable, but slow",   act: "Sell more: move it up the menu or have servers suggest it." },
+  star:      { name: "Stars",      what: "Popular and profitable", act: "Keep it. Don't change the recipe or the price much." },
+  dog:       { name: "Dogs",       what: "Slow and thin margin",   act: "Fix the cost or price, or take it off the menu." },
+  plowhorse: { name: "Plowhorses", what: "Popular, thin margin",   act: "Raise the price a little or trim the portion cost." },
+};
 function renderQuadrantChart(rows, avgUnits, avgMargin) {
-  const W = 680, H = 380, PAD = 46;
-  const maxUnits = Math.max(1, ...rows.map((r) => r.units)) * 1.1;
-  const maxMargin = Math.max(1, ...rows.map((r) => r.marginPerPlate)) * 1.15;
-  const minMargin = Math.min(0, Math.min(...rows.map((r) => r.marginPerPlate)) * 1.15);
-  const maxRevenue = Math.max(1, ...rows.map((r) => r.weeklyRevenue));
-  const x = (u) => PAD + (u / maxUnits) * (W - PAD * 2);
-  const y = (m) => H - PAD - ((m - minMargin) / (maxMargin - minMargin)) * (H - PAD * 2);
-  const color = { green: "var(--sage)", amber: "var(--amber)", red: "var(--rust)" };
-  const ax = x(avgUnits).toFixed(1), ay = y(avgMargin).toFixed(1);
-
-  // Only the 6 biggest sellers get a name label, so the chart stays readable.
-  // Hover (or tap) any bubble to see its name.
-  // Labels that would overlap one already placed are skipped.
-  const labeled = new Set();
-  const boxes = [];
-  for (const r of [...rows].filter((r) => r.units > 0).sort((a, b) => b.weeklyRevenue - a.weeklyRevenue).slice(0, 6)) {
-    const name = r.d.name.length > 22 ? 22 : r.d.name.length;
-    const w = name * 6 + 6, cx = x(r.units), top = y(r.marginPerPlate) - (6 + (r.weeklyRevenue / maxRevenue) * 16) - 17;
-    const box = { l: cx - w / 2, r: cx + w / 2, t: top, b: top + 14 };
-    if (boxes.some((o) => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)) continue;
-    boxes.push(box); labeled.add(r.d.id);
-  }
-  const points = rows.map((r) => {
-    const cx = x(r.units), cy = y(r.marginPerPlate);
-    const rad = 6 + (r.weeklyRevenue / maxRevenue) * 16;
-    const label = r.d.name.length > 22 ? r.d.name.slice(0, 21) + "…" : r.d.name;
-    const text = labeled.has(r.d.id) ? `<text x="${cx.toFixed(1)}" y="${(cy - rad - 5).toFixed(1)}" font-size="10.5" font-weight="600" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.85" text-anchor="middle">${esc(label)}</text>` : "";
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${color[r.status]}" fill-opacity="0.82" style="stroke:var(--ink)" stroke-opacity="0.2"><title>${esc(r.d.name)}: ${r.units} sold, ${fmt(r.marginPerPlate)} margin/plate</title></circle>
-      ${text}`;
-  }).join("");
-
-  const lbl = (xx, yy, fill, anchor, text) =>
-    `<text x="${xx}" y="${yy}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:${fill}" text-anchor="${anchor}" font-weight="600">${text}</text>`;
+  const groups = { puzzle: [], star: [], dog: [], plowhorse: [] };
+  for (const r of rows) groups[quadrantOf(r.units, r.marginPerPlate, avgUnits, avgMargin)].push(r);
+  for (const k in groups) groups[k].sort((a, b) => b.weeklyMargin - a.weeklyMargin);
+  const box = (k) => {
+    const q = QUADS[k], list = groups[k];
+    return `<section class="mq mq-${k}" aria-label="${q.name}">
+      <div class="mq-head"><h4>${q.name}</h4><span class="mq-count">${list.length} ${list.length === 1 ? "dish" : "dishes"}</span></div>
+      <div class="mq-what">${q.what}</div>
+      <p class="mq-act">${q.act}</p>
+      ${list.length ? `<ul>${list.map((r) => `<li><span>${esc(r.d.name)}</span><span class="mono">${r.units} sold | ${fmt(r.marginPerPlate)}</span></li>`).join("")}</ul>` : `<p class="mq-none">None this week.</p>`}
+    </section>`;
+  };
+  $("matrixNote").textContent = `Compared with your average dish: ${Math.round(avgUnits)} sold a week, ${fmt(avgMargin)} profit per plate`;
   $("quadrantChart").innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Popularity versus profitability chart">
-      <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.3"/>
-      <line x1="${PAD}" y1="${PAD - 10}" x2="${PAD}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.3"/>
-      <line x1="${ax}" y1="${PAD - 10}" x2="${ax}" y2="${H - PAD}" style="stroke:var(--ink)" stroke-opacity="0.2" stroke-dasharray="4 4"/>
-      <line x1="${PAD}" y1="${ay}" x2="${W - PAD}" y2="${ay}" style="stroke:var(--ink)" stroke-opacity="0.2" stroke-dasharray="4 4"/>
-      ${lbl(W - PAD, PAD - 16, "var(--good)", "end", "Stars: popular and profitable")}
-      ${lbl(W - PAD, H - PAD + 22, "var(--watch)", "end", "Plowhorses: popular, thinner margin")}
-      ${lbl(PAD, PAD - 16, "var(--puzzle)", "start", "Puzzles: profitable, sell more of these")}
-      ${lbl(PAD, H - PAD + 22, "var(--over)", "start", "Dogs: slow and thin")}
-      <text x="${W / 2}" y="${H - 8}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.6" text-anchor="middle">Units sold per week →</text>
-      <text x="14" y="${H / 2}" font-size="11" font-family="Figtree, system-ui, sans-serif" style="fill:var(--ink)" fill-opacity="0.6" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">Margin $ per plate →</text>
-      ${points}
-    </svg>`;
+    <div class="matrix">
+      <div class="mx-y" aria-hidden="true"><span>More profit per plate</span></div>
+      <div class="mx-grid">${box("puzzle")}${box("star")}${box("dog")}${box("plowhorse")}</div>
+      <div class="mx-x" aria-hidden="true"><span>Sells more</span></div>
+    </div>`;
 }
 
 function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
@@ -869,7 +855,7 @@ function passTickets(t, week) {
       out.push({ kind: "useby", title: "Use it or lose it", goto: "specials", link: "Make a specials menu",
         body: `<div class="t-big">${tnNum(soon.length)} ${plural(soon.length, "item expires", "items expire")} within 2 days</div>` +
           tnLines(soon.slice(0, 4).map((i) => { const n = daysLeft(i.use_by);
-            return [i.name, (i.on_hand != null ? `${trimNum(i.on_hand)} ${i.unit} · ` : "") + when(n), n <= 0 ? "over" : "watch"]; })) });
+            return [i.name, (i.on_hand != null ? `${trimNum(i.on_hand)} ${i.unit} | ` : "") + when(n), n <= 0 ? "over" : "watch"]; })) });
     }
   }
 
@@ -933,7 +919,7 @@ function weekTickets(t, week) {
     const notes = String(d.followups || "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 2);
     out.push({ kind: "mod", title: "Last MOD report", goto: "mod", link: "Open MOD Report",
       body: `<div class="t-big">${s.covers ? `${tnNum(s.covers)} covers` : esc(r.shift || "Report")}</div>` +
-        tnLines([["Shift", `${fmtReportDay(r.report_date).replace(/, \d{4}$/, "")} · ${r.shift || ""}`],
+        tnLines([["Shift", `${fmtReportDay(r.report_date).replace(/, \d{4}$/, "")} | ${r.shift || ""}`],
           ...(r.manager ? [["Manager", r.manager]] : []), ...(d.weather ? [["Weather", d.weather + (d.temp ? `, ${d.temp}°` : "")]] : []),
           ...(s.comps ? [["Comps", fmt0(s.comps)]] : [])]) +
         (notes.length ? `<ol class="t-notes">${notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "") });
@@ -961,10 +947,10 @@ function renderHome() {
   el.innerHTML = `
     <div class="tn-title">
       <h2>Tonight</h2>
-      <div class="tn-when">${now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · ${esc(rest.name)}</div>
+      <div class="tn-when">${now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} | ${esc(rest.name)}</div>
     </div>
     <section>
-      <div class="tn-head"><h3>On the pass</h3><span class="hint">Needs you tonight · tap a ticket, or mark it done</span></div>
+      <div class="tn-head"><h3>On the pass</h3><span class="hint">Needs you tonight | tap a ticket, or mark it done</span></div>
       <div class="tn-scroller"><div class="tn-track" id="tnPass">${pass.length ? pass.map((tk, i) => tonightTicket(tk, i, i + 1, time, true)).join("") : PASS_CLEAR}</div></div>
     </section>
     <section>
@@ -1072,7 +1058,7 @@ function updateSalesTotal() {
     const u = parseInt(inp.value, 10);
     if (u > 0) { plates += u; rev += u * (dishes.find((d) => d.id === inp.dataset.dish)?.price || 0); }
   });
-  $("salesTotal").textContent = `${plates} plates · ${fmt0(rev)} revenue`;
+  $("salesTotal").textContent = `${plates} plates | ${fmt0(rev)} revenue`;
 }
 
 async function saveSales() {
@@ -1111,20 +1097,27 @@ function renderIngredients() {
   const usage = usageMap();
   document.querySelectorAll(".stock-field").forEach((el) => el.classList.toggle("hidden", !stockReady));
   const list = [...ingredients.values()].filter((i) => !q || i.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
+  // 86'd list (0 on hand) and the dishes it stops
+  const out86 = stockReady ? eightySixNow() : [];
+  $("card86").classList.toggle("hidden", !out86.length);
+  $("list86").innerHTML = out86.length ? `<ul class="list86">${out86.map((x) => {
+    const ing = [...ingredients.values()].find((i) => i.name === x.name);
+    return `<li><strong>${esc(x.name)}</strong>${x.dishes.length ? `<span>Stops: ${x.dishes.map(esc).join(", ")}</span>` : ""}<button class="linkbtn" data-86="${ing?.id}" type="button">Back in stock</button></li>`; }).join("")}</ul>` : "";
   if (!ingredients.size) { $("ingTable").innerHTML = `<tbody><tr><td class="muted">No ingredients yet. Add one above.</td></tr></tbody>`; return; }
   const cols = stockReady ? 7 : 5;
   $("ingTable").innerHTML = `
     <thead><tr><th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th>${stockReady ? `<th class="num">On hand</th><th>Use by</th>` : ""}<th>Used in</th><th></th></tr></thead>
     <tbody>${list.map((i) => {
       const used = usage.get(i.id) || [];
-      return `<tr data-row="${i.id}">
+      const out = i.on_hand !== null && Number(i.on_hand) === 0;
+      return `<tr data-row="${i.id}" class="${out ? "is86" : ""}">
         <td><input data-id="${i.id}" data-field="name" value="${esc(i.name)}" maxlength="100" aria-label="Name"></td>
         <td style="width:90px"><input data-id="${i.id}" data-field="unit" value="${esc(i.unit)}" maxlength="20" list="unitList" aria-label="Unit"></td>
         <td class="num" style="width:140px"><input class="num mono" data-id="${i.id}" data-field="cost" type="number" min="0" step="0.01" value="${trimNum(i.cost)}" aria-label="Cost"></td>
         ${stockReady ? `<td class="num" style="width:110px"><input class="num mono" data-id="${i.id}" data-field="on_hand" type="number" min="0" step="0.5" value="${i.on_hand == null ? "" : trimNum(i.on_hand)}" placeholder="—" aria-label="On hand"></td>
         <td style="width:250px"><div class="useby"><input data-id="${i.id}" data-field="use_by" type="date" value="${i.use_by || ""}" aria-label="Use by"><span data-tag="${i.id}">${spoilTag(i)}</span></div></td>` : ""}
         <td class="used" title="${esc(used.join(", "))}">${used.length ? `${used.length} dish${used.length > 1 ? "es" : ""}` : "—"}</td>
-        <td class="num"><button class="iconbtn" data-del-ing="${i.id}" type="button" aria-label="Delete ${esc(i.name)}">✕</button></td>
+        <td class="num nowrap">${stockReady ? `<button class="btn86 ${out ? "on" : ""}" data-86="${i.id}" type="button" aria-pressed="${out}" title="${out ? "Back in stock" : "Out of it: 86 it"}">${out ? "86'd" : "86"}</button>` : ""}<button class="iconbtn" data-del-ing="${i.id}" type="button" aria-label="Delete ${esc(i.name)}">✕</button></td>
       </tr>`;
     }).join("") || `<tr><td colspan="${cols}" class="muted">Nothing matches "${esc(q)}".</td></tr>`}</tbody>`;
 }
@@ -1160,6 +1153,128 @@ async function updateIngredient(input) {
     tr.classList.remove("saved"); void tr.offsetWidth; tr.classList.add("saved");
     toast(`Saved ${row.name}.`);
   } catch { input.value = shown(field); }
+}
+
+// 86 = out of it: on hand goes to 0, and the MOD Report lists it. Back in
+// stock clears the amount so the next count can be typed in.
+async function toggle86(id) {
+  const ing = ingredients.get(id);
+  if (!ing) return;
+  const out = ing.on_hand !== null && Number(ing.on_hand) === 0;
+  try {
+    const row = await run(sb.from("ingredients").update({ on_hand: out ? null : 0, updated_at: new Date().toISOString() }).eq("id", id).select(ingCols()).single());
+    ingredients.set(id, ingRow(row));
+    renderIngredients();
+    if (out) { toast(`${row.name} is back. Type in how much you have.`); document.querySelector(`[data-id="${id}"][data-field="on_hand"]`)?.focus(); }
+    else toast(`${row.name} is 86'd. It's on tonight's MOD Report.`);
+  } catch { /* toast shown */ }
+}
+
+// ---------------------------------------------------------- Invoice scanning
+// A photo of a supplier invoice → Gemini reads the lines → the owner checks
+// and edits them → matched ingredients get the new cost, more on hand and a
+// new use-by date; new ones are added.
+let invoiceDraft = null;   // { supplier, date, rows: [{ use, name, unit, qty, cost, useBy, low }] }
+
+function shrinkImage(file, max = 1800) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.85).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+const fileB64 = (file) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(",")[1]); r.onerror = reject; r.readAsDataURL(file); });
+
+async function scanInvoice(file) {
+  if (!file) return;
+  const pdf = file.type === "application/pdf";
+  if (!pdf && !/^image\//.test(file.type)) { toast("Pick a photo or a PDF of the invoice.", "err"); return; }
+  if (pdf && file.size > 3 * 1024 * 1024) { toast("That PDF is too big. Try a photo of the page instead.", "err"); return; }
+  const note = $("invoiceNote");
+  note.textContent = "Gemini is reading the invoice. This takes 10 to 20 seconds…";
+  $("invoiceBtn").classList.add("disabled"); $("invoiceBlade").classList.remove("hidden");
+  try {
+    const data = pdf ? await fileB64(file) : await shrinkImage(file);
+    const { data: sess } = await sb.auth.getSession();
+    const r = await fetch("/api/specials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sess.session?.access_token || ""}` },
+      body: JSON.stringify({ action: "invoice", mime: pdf ? "application/pdf" : "image/jpeg", data, today: dayStr(new Date()),
+        ingredients: [...ingredients.values()].map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (r.status === 503 || r.status === 404) { note.textContent = ""; toast("The Gemini helper isn't connected yet. See the README's Specials section.", "err"); return; }
+    if (!r.ok) { note.textContent = ""; toast(out.error || "Couldn't read that invoice. Try again.", "err"); return; }
+    const inv = out.invoice, base = /^\d{4}-\d{2}-\d{2}$/.test(inv.invoice_date || "") ? inv.invoice_date : dayStr(new Date());
+    invoiceDraft = { supplier: inv.supplier || "", date: base, rows: inv.items.map((x) => {
+      const match = findIngredient(x.existing || "") && x.existing ? findIngredient(x.existing) : [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
+      const days = Number(x.shelf_life_days);
+      return { use: true, name: match ? match.name : String(x.name || "").trim(), unit: match ? match.unit : String(x.unit || "each"),
+        qty: Number(x.quantity) || 0, cost: Math.round((Number(x.unit_cost) || 0) * 10000) / 10000,
+        useBy: Number.isFinite(days) && days > 0 ? addDays(base, Math.round(days)) : "", low: x.confidence === "low" };
+    }) };
+    note.textContent = "";
+    renderInvoice();
+  } catch { note.textContent = ""; toast("Couldn't read that file. Try another photo.", "err"); }
+  finally { $("invoiceBtn").classList.remove("disabled"); $("invoiceBlade").classList.add("hidden"); $("invoiceFile").value = ""; }
+}
+
+function renderInvoice() {
+  const el = $("invoiceResult");
+  if (!invoiceDraft) { el.innerHTML = ""; return; }
+  const v = invoiceDraft;
+  const used = v.rows.filter((x) => x.use);
+  const known = (n) => [...ingredients.values()].find((i) => i.name.toLowerCase() === String(n).trim().toLowerCase());
+  el.innerHTML = `
+    <div class="inv-head"><strong>${esc(v.supplier || "Invoice")}</strong> | ${fmtDay(v.date)} | ${v.rows.length} line${v.rows.length === 1 ? "" : "s"} read. Check them, change anything, then add.</div>
+    <datalist id="ingNames">${[...ingredients.values()].map((i) => `<option value="${esc(i.name)}">`).join("")}</datalist>
+    <div class="scroll-x"><table class="edit inv-table">
+      <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
+      <tbody>${v.rows.map((x, i) => { const k = known(x.name), old = k ? k.cost : null;
+        return `<tr class="${x.use ? "" : "skip"} ${x.low ? "low" : ""}">
+        <td><input type="checkbox" data-inv="${i}" data-k="use" ${x.use ? "checked" : ""} aria-label="Include this line"></td>
+        <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient"></td>
+        <td class="inv-tag">${k ? `<span class="tag-upd">Updates yours</span>${old !== null && Math.abs(old - x.cost) > 0.004 ? `<span class="inv-was">was ${fmt(old)}</span>` : ""}` : `<span class="tag-new">New</span>`}${x.low ? `<span class="inv-low">Check this line</span>` : ""}</td>
+        <td style="width:90px"><input data-inv="${i}" data-k="unit" value="${esc(x.unit)}" list="unitList" maxlength="20" aria-label="Unit"></td>
+        <td class="num" style="width:110px"><input class="num mono" type="number" min="0" step="0.5" data-inv="${i}" data-k="qty" value="${trimNum(x.qty)}" aria-label="Received"></td>
+        <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
+        ${stockReady ? `<td style="width:170px"><input type="date" data-inv="${i}" data-k="useBy" value="${esc(x.useBy)}" aria-label="Use by"></td>` : ""}
+      </tr>`; }).join("")}</tbody>
+    </table></div>
+    <div class="row-actions">
+      <button class="applybtn" id="invoiceSave" type="button" ${used.length ? "" : "disabled"}>Add ${used.length} to my ingredients</button>
+      <button class="ghostbtn dark" id="invoiceCancel" type="button">Cancel</button>
+      <span class="note">Matched items get the new cost${stockReady ? ", the delivered amount added to on hand, and the new use-by date" : ""}. Recipe costs update right away.</span>
+    </div>`;
+}
+
+async function saveInvoice() {
+  const rows = invoiceDraft.rows.filter((x) => x.use && String(x.name).trim());
+  if (rows.some((x) => !Number.isFinite(Number(x.cost)) || Number(x.cost) < 0 || !String(x.unit).trim())) { toast("Every line needs a unit and a cost of 0 or more.", "err"); return; }
+  const btn = $("invoiceSave"); btn.disabled = true;
+  let updated = 0, added = 0;
+  try {
+    for (const x of rows) {
+      const k = [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).trim().toLowerCase());
+      const qty = Number(x.qty) || 0;
+      const change = { cost: Number(x.cost), updated_at: new Date().toISOString() };
+      if (stockReady) { change.on_hand = (k && k.on_hand ? Number(k.on_hand) : 0) + qty; if (x.useBy) change.use_by = x.useBy; }
+      if (k) { await run(sb.from("ingredients").update(change).eq("id", k.id)); updated++; }
+      else { delete change.updated_at; await run(sb.from("ingredients").insert({ restaurant_id: rest.id, name: String(x.name).trim(), unit: String(x.unit).trim(), ...change })); added++; }
+    }
+    await loadRestaurantData();
+    invoiceDraft = null;
+    render();
+    toast(`From the invoice: ${updated} updated, ${added} added.`);
+  } catch { btn.disabled = false; }
 }
 
 async function addIngredient(e) {
@@ -1225,7 +1340,7 @@ function renderRecipes() {
   $("recipeList").innerHTML = (editingDishId === "new"
     ? `<button type="button" class="dish-row selected"><span class="info"><span class="name">${esc(draft.name) || "New dish"}</span><span class="cat">Not saved yet</span></span></button>` : "") +
     dishes.map((d) => `<button type="button" class="dish-row ${d.id === editingDishId ? "selected" : ""}" data-recipe="${d.id}">
-        <span class="info"><span class="name">${esc(d.name)}</span><span class="cat">${esc(d.category || "Uncategorized")} · ${fmt(d.price)} · ${d.items.length} ingredient${d.items.length === 1 ? "" : "s"}</span></span>
+        <span class="info"><span class="name">${esc(d.name)}</span></span>
       </button>`).join("");
   renderRecipeEditor();
 }
@@ -1554,7 +1669,7 @@ function updateLaborTotal() {
   const L = laborTotals(m);
   const { revenue } = salesForWeek(laborWeek);
   $("laborTotal").textContent = m.size
-    ? `${trimNum(L.hours)} hours · ${fmt0(L.wages)} wages + ${laborBurden()}% taxes & benefits = ${fmt0(L.total)}` + (revenue ? ` · ${fmtPct((L.total / revenue) * 100)} of sales` : "")
+    ? `${trimNum(L.hours)} hours | ${fmt0(L.wages)} wages + ${laborBurden()}% taxes & benefits = ${fmt0(L.total)}` + (revenue ? ` | ${fmtPct((L.total / revenue) * 100)} of sales` : "")
     : "";
 }
 
@@ -1738,6 +1853,7 @@ function startReport(id) {
     modAutoPull = !!d && !d.pos_pulled && !String(d.sales).trim() && !Object.keys(d.hourly || {}).length;
   }
   modPosNote = "";
+  modEditing = new Set();
   modDirty = false;
   return true;
 }
@@ -1783,12 +1899,12 @@ function renderModMetrics() {
     <div class="metric"><div class="num mono">${sum("covers").toLocaleString()}</div><div class="label">Covers, last 7 days (${recent.length} report${recent.length === 1 ? "" : "s"})</div></div>
     <div class="metric"><div class="num mono">${fmt0(sum("comps"))}</div><div class="label">Comps, voids &amp; refunds, last 7 days</div></div>
     <div class="metric ${sum("emp") ? "warn" : ""}"><div class="num mono">${sum("emp")}</div><div class="label">Employee issues, last 7 days</div></div>
-    <div class="metric ${sum("guest") ? "warn" : ""}"><div class="num mono">${sum("guest")}</div><div class="label">Guest issues, last 7 days${inj ? ` · ${inj} injur${inj === 1 ? "y" : "ies"}` : ""}</div></div>`;
+    <div class="metric ${sum("guest") ? "warn" : ""}"><div class="num mono">${sum("guest")}</div><div class="label">Guest issues, last 7 days${inj ? ` | ${inj} injur${inj === 1 ? "y" : "ies"}` : ""}</div></div>`;
 }
 
 function renderReportList() {
   const draftRow = editingReportId === "new"
-    ? `<button type="button" class="dish-row selected"><span class="info"><span class="name">${fmtReportDay(modDraft.report_date || dayStr(new Date()))} · ${esc(modDraft.shift)}</span><span class="cat">New report, not saved yet</span></span></button>`
+    ? `<button type="button" class="dish-row selected"><span class="info"><span class="name">${fmtReportDay(modDraft.report_date || dayStr(new Date()))} | ${esc(modDraft.shift)}</span><span class="cat">New report, not saved yet</span></span></button>`
     : "";
   $("reportList").innerHTML = draftRow + (modReports.map((r) => {
     const st = reportStats(reportFrom(r).data);
@@ -1797,147 +1913,269 @@ function renderReportList() {
     const bits = [r.manager, st.covers ? `${st.covers} covers` : "", st.sales ? fmt0(st.sales) : "", issues ? `${issues} issue${issues === 1 ? "" : "s"}` : "no issues"].filter(Boolean);
     return `<button type="button" class="dish-row ${r.id === editingReportId ? "selected" : ""}" data-report="${r.id}">
         <span class="dot ${dot}"></span>
-        <span class="info"><span class="name">${fmtReportDay(r.report_date)} · ${esc(r.shift)}</span><span class="cat">${esc(bits.join(" · "))}</span></span>
+        <span class="info"><span class="name">${fmtReportDay(r.report_date)} | ${esc(r.shift)}</span><span class="cat">${esc(bits.join(" | "))}</span></span>
       </button>`;
   }).join("") || (draftRow ? "" : `<div class="rail-empty">No reports yet.</div>`));
+}
+
+// ---- The schedule, as if synced from a scheduling app. It's made from the
+// team list (same people, roles and usual hours each time for a date and
+// shift), then saved with the report. Times are "HH:MM", 24-hour.
+function seededRandom(text) {
+  let h = 2166136261;
+  for (const ch of text) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 10000) / 10000; };
+}
+const toMin = (t) => { const [h, m] = String(t || "").split(":").map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+const toHHMM = (m) => { m = ((Math.round(m / 1) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+function fmtClock(t) {
+  const m = toMin(t); if (m === null) return "—";
+  const h = Math.floor(m / 60) % 24, mm = String(m % 60).padStart(2, "0");
+  return `${h % 12 || 12}:${mm} ${h < 12 ? "AM" : "PM"}`;
+}
+function shiftHours(a, b) { const x = toMin(a), y = toMin(b); if (x === null || y === null) return 0; return ((y - x + 1440) % 1440) / 60; }
+function scheduleFor(date, shift, manager = "") {
+  const rnd = seededRandom(`${rest?.id}|${date}|${shift}`);
+  const lunch = /lunch|breakfast|brunch/i.test(shift);
+  const [from, to] = SHIFT_HOURS[shift] || [11, 22];
+  const base = (role, dept) => {
+    // [start, end] in minutes, by role, around the shift's hours
+    const r = String(role).toLowerCase();
+    const s0 = from * 60, e0 = (to + 1) * 60;
+    if (dept === "Mgmt") return [s0 - 60, e0 + 30];
+    if (/chef|line/.test(r)) return [s0 - 90, e0 + 15];
+    if (/prep|dish/.test(r)) return [s0 - (lunch ? 120 : 60), e0 + 30];
+    if (/bar/.test(r)) return [s0 - 30, e0 + 60];
+    if (/host|bus/.test(r)) return [s0, e0 - 30];
+    return [s0 - 30, e0 - 15];   // servers and everyone else
+  };
+  let team = staff.filter((p) => p.active !== false);
+  if (!team.length) return [];
+  // Lunch runs lighter: one manager, and a server or host may be off.
+  if (lunch) {
+    const mgmt = team.filter((p) => p.department === "Mgmt");
+    const mod = mgmt.find((p) => manager && p.name.toLowerCase() === manager.trim().toLowerCase()) || mgmt[mgmt.length - 1];
+    team = team.filter((p) => p.department !== "Mgmt" || p === mod);
+    team = team.filter((p) => !(/host|bus/i.test(p.role) && rnd() < 0.6));
+  }
+  return team.map((p) => {
+    const [a, b] = base(p.role, p.department);
+    const late = rnd() < 0.12 ? 8 + Math.round(rnd() * 12) : Math.round(rnd() * 9) - 6;
+    return { name: p.name, role: p.role || "", dept: p.department || "", sched_in: toHHMM(a), sched_out: toHHMM(b),
+      in: toHHMM(a + late), out: toHHMM(b + Math.round(rnd() * 25) - 10) };
+  });
+}
+function ensureSchedule(r) {
+  const d = r.data;
+  if (Array.isArray(d.shifts) && d.shifts.length) return;
+  d.shifts = scheduleFor(r.report_date || dayStr(new Date()), r.shift, r.manager);
+  d.shifts_synced = new Date().toISOString();
+  d.shifts_edited = false;
+}
+
+// ---- 86'd: anything on the Ingredients tab with 0 on hand, and the dishes it stops.
+function eightySixNow() {
+  return [...ingredients.values()].filter((i) => i.on_hand !== null && Number(i.on_hand) === 0).sort((a, b) => a.name.localeCompare(b.name))
+    .map((i) => ({ name: i.name, dishes: dishes.filter((d) => d.items.some((it) => it.ingredient_id === i.id)).map((d) => d.name) }));
+}
+// Today's (or a new) report shows the live list; older reports show what was 86'd when they were saved.
+function eightySixFor(r) {
+  const live = !r.id || r.report_date === dayStr(new Date());
+  return live || !Array.isArray(r.data.eighty_six_items) ? eightySixNow() : r.data.eighty_six_items;
 }
 
 function renderModEditor() {
   const el = $("modEditor");
   el.className = "panel mod";
   const r = modDraft, d = r.data;
+  ensureSchedule(r);
+  const ed = (k) => modEditing.has(k);
   const opts = (list, v, blank) => (blank ? `<option value="">${blank}</option>` : "") +
     list.map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("");
   const hourOpts = (from, to, v) => { let o = ""; for (let h = from; h <= to; h++) o += `<option value="${h}" ${h === v ? "selected" : ""}>${fmtHour(h)}</option>`; return o; };
   const input = (label, path, val, attrs = "") => `<label>${label}<input data-f="${path}" value="${esc(val)}" ${attrs}></label>`;
-  const area = (label, path, val, ph) => `<label class="wide">${label}<textarea data-f="${path}" rows="3" placeholder="${esc(ph)}">${esc(val)}</textarea></label>`;
+  const area = (label, path, val, ph) => `<label class="wide">${label}<span class="voice-field"><textarea data-f="${path}" rows="3" placeholder="${esc(ph)}">${esc(val)}</textarea>${micBtn()}</span></label>`;
+  const para = (v) => (String(v ?? "").trim() ? `<p class="ms-text">${esc(v).replace(/\n/g, "<br>")}</p>` : `<p class="ms-empty">Nothing written.</p>`);
+  const field = (label, v) => `<div class="ms-field"><div class="ms-lbl">${label}</div>${para(v)}</div>`;
   // Each issue / comp is a small card: short fields side by side, long ones full width.
   const rowsTable = (list, cols, addLabel, empty) => {
     const cards = d[list].map((row, i) => `<div class="row-card">
         <button class="iconbtn" data-del-row="${list}:${i}" type="button" aria-label="Remove this line">✕</button>
         <div class="form-grid">${cols.map((c) => `<label${c.wide ? ` class="wide"` : ""}>${c.label}${c.options
           ? `<select data-row="${list}" data-i="${i}" data-k="${c.k}">${opts(c.options, row[c.k], c.blank)}</select>`
-          : `<input data-row="${list}" data-i="${i}" data-k="${c.k}" value="${esc(row[c.k])}" placeholder="${esc(c.ph || "")}" ${c.money ? `type="number" step="0.01" min="0" class="mono"` : `maxlength="300"`}>`}</label>`).join("")}
+          : c.money ? `<input data-row="${list}" data-i="${i}" data-k="${c.k}" value="${esc(row[c.k])}" type="number" step="0.01" min="0" class="mono">`
+          : `<span class="voice-field"><input data-row="${list}" data-i="${i}" data-k="${c.k}" value="${esc(row[c.k])}" placeholder="${esc(c.ph || "")}" maxlength="300">${micBtn()}</span>`}</label>`).join("")}
         </div></div>`).join("");
-    return (cards || `<p class="muted small">${empty}</p>`) + `<button class="ghostbtn dark" data-add="${list}" type="button">${addLabel}</button>`;
+    return (cards || `<p class="ms-empty">${empty}</p>`) + `<button class="ghostbtn dark" data-add="${list}" type="button">${addLabel}</button>`;
   };
+  // Read-only list of issues / comps
+  const rowsView = (list, line, empty) => d[list].length
+    ? `<div class="ms-rows">${d[list].map((row) => `<div class="ms-row">${line(row)}</div>`).join("")}</div>` : `<p class="ms-empty">${empty}</p>`;
+  // One collapsible section with its own Edit button.
+  const sec = (key, title, badge, view, edit, canEdit = true) => `
+    <details class="mod-sec${ed(key) ? " editing" : ""}" data-sec="${key}" ${modOpen.has(key) || ed(key) ? "open" : ""}>
+      <summary><span class="ms-title">${title}</span><span class="ms-badge" data-badge="${key}">${badge}</span>
+        ${canEdit ? `<button type="button" class="ms-edit ${ed(key) ? "applybtn" : "ghostbtn dark"}" data-edit-sec="${key}">${ed(key) ? "Done" : "Edit"}</button>` : ""}
+        <span class="ms-chev" aria-hidden="true"></span></summary>
+      <div class="ms-body">${ed(key) ? edit : view}</div>
+    </details>`;
+
   const hours = [];
   for (let h = d.hours_from; h <= d.hours_to; h++) hours.push(h);
-
-  // Same shift, one week before tomorrow: a starting point for the forecast.
+  const s = reportStats(d);
+  // Same shift one week earlier, for comparison, and tomorrow's reference.
+  const lastWeek = modReports.find((x) => x.report_date === addDays(r.report_date || dayStr(new Date()), -7) && x.shift === r.shift && x.id !== r.id);
+  const lw = lastWeek ? reportStats(reportFrom(lastWeek).data) : null;
   const ref = modReports.find((x) => x.report_date === addDays(r.report_date || dayStr(new Date()), -6) && x.shift === r.shift);
   const refStats = ref ? reportStats(reportFrom(ref).data) : null;
   const tomorrow = r.report_date ? parseDay(addDays(r.report_date, 1)).toLocaleDateString(undefined, { weekday: "long" }) : "tomorrow";
+  const lwDay = r.report_date ? parseDay(addDays(r.report_date, -7)).toLocaleDateString(undefined, { weekday: "short" }) : "";
+
+  // Staffing numbers
+  const sh = d.shifts || [];
+  const schedHrs = sh.reduce((t, x) => t + shiftHours(x.sched_in, x.sched_out), 0);
+  const workHrs = sh.reduce((t, x) => t + shiftHours(x.in, x.out), 0);
+  const lateBy = (x) => { const a = toMin(x.sched_in), b = toMin(x.in); if (a === null || b === null) return 0; const m = ((b - a + 720 + 1440) % 1440) - 720; return m > 5 ? m : 0; };
+  const late = sh.filter((x) => lateBy(x));
+  const synced = d.shifts_synced ? new Date(d.shifts_synced).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  const staffView = `
+    <div class="sync-line"><span class="sync-dot" aria-hidden="true"></span>Synced from your scheduling app${synced ? ` at ${synced}` : ""}${d.shifts_edited ? " | edited by a manager" : ""}</div>
+    <div class="scroll-x"><table class="sched">
+      <thead><tr><th>Name</th><th>Role</th><th>Scheduled</th><th>Clocked in</th><th>Clocked out</th><th class="num">Hours</th></tr></thead>
+      <tbody>${sh.map((x) => `<tr><td><strong>${esc(x.name)}</strong></td><td>${esc(x.role)}</td>
+        <td>${fmtClock(x.sched_in)} – ${fmtClock(x.sched_out)}</td>
+        <td>${fmtClock(x.in)}${lateBy(x) ? ` <span class="late">Late ${lateBy(x)} min</span>` : ""}</td><td>${fmtClock(x.out)}</td>
+        <td class="num mono">${shiftHours(x.in, x.out).toFixed(2)}</td></tr>`).join("") || `<tr><td colspan="6">No one on the schedule. Add your team in The Line first.</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="5">Total (scheduled ${schedHrs.toFixed(1)} hrs)</td><td class="num mono">${workHrs.toFixed(2)}</td></tr></tfoot>
+    </table></div>`;
+  const staffEdit = `
+    <div class="sync-line"><span class="sync-dot" aria-hidden="true"></span>Fix a missed punch here. Changes are kept with this report.</div>
+    <div class="scroll-x"><table class="sched">
+      <thead><tr><th>Name</th><th>Role</th><th>Scheduled</th><th>Clocked in</th><th>Clocked out</th><th class="num">Hours</th></tr></thead>
+      <tbody>${sh.map((x, i) => `<tr><td><strong>${esc(x.name)}</strong></td><td>${esc(x.role)}</td>
+        <td>${fmtClock(x.sched_in)} – ${fmtClock(x.sched_out)}</td>
+        <td><input type="time" data-shift="${i}" data-k="in" value="${esc(x.in)}" aria-label="${esc(x.name)} clocked in"></td>
+        <td><input type="time" data-shift="${i}" data-k="out" value="${esc(x.out)}" aria-label="${esc(x.name)} clocked out"></td>
+        <td class="num mono" data-shift-hrs="${i}">${shiftHours(x.in, x.out).toFixed(2)}</td></tr>`).join("")}</tbody>
+    </table></div>`;
+
+  // Covers & sales
+  const maxC = Math.max(1, ...hours.map((h) => Number(d.hourly[h]) || 0));
+  const salesView = `
+    <table class="hours view">
+      <tbody>${hours.map((h) => { const c = Number(d.hourly[h]) || 0; return `<tr class="${s.peak && c === s.peak.covers ? "peak" : ""}"><td>${fmtHour(h)}–${fmtHour(h + 1)}</td>
+        <td class="num mono">${d.hourly[h] ?? "—"}</td><td class="barcell"><span class="hbar" style="width:${(c / maxC) * 100}%"></span></td></tr>`; }).join("")}</tbody>
+      <tfoot><tr><td>Total</td><td class="num mono">${s.covers}</td><td class="note">${s.peak ? `Peak: ${fmtHour(s.peak.h)} (${s.peak.covers})` + (s.rush ? ` | busiest 2 hours: ${fmtHour(s.rush.h)}–${fmtHour(s.rush.h + 2)} (${s.rush.covers})` : "") : ""}</td></tr></tfoot>
+    </table>`;
+  const salesEdit = `
+    <div class="toolbar">
+      <label class="stack">Net sales ($)<input data-f="data.sales" value="${esc(d.sales)}" type="number" min="0" step="0.01" placeholder="From the POS" class="mono"></label>
+      <label class="stack">First hour<select data-f="data.hours_from">${hourOpts(5, 23, d.hours_from)}</select></label>
+      <label class="stack">Last hour<select data-f="data.hours_to">${hourOpts(d.hours_from, 27, d.hours_to)}</select></label>
+    </div>
+    <table class="hours">
+      <thead><tr><th>Hour</th><th class="num">Covers</th><th></th></tr></thead>
+      <tbody>${hours.map((h) => `<tr data-hrow="${h}"><td>${fmtHour(h)}–${fmtHour(h + 1)}</td>
+        <td class="num"><input type="number" min="0" step="1" inputmode="numeric" class="num mono" data-hour="${h}" value="${esc(d.hourly[h] ?? "")}" placeholder="—" aria-label="Covers ${fmtHour(h)}"></td>
+        <td class="barcell"><span class="hbar" data-bar="${h}"></span></td></tr>`).join("")}</tbody>
+      <tfoot><tr><td>Total</td><td class="num mono" id="coverTotal"></td><td class="note" id="peakNote"></td></tr></tfoot>
+    </table>`;
+
+  const e86 = eightySixFor(r);
+  const live86 = !r.id || r.report_date === dayStr(new Date());
+  const list86 = e86.length
+    ? `<ul class="list86">${e86.map((x) => `<li><strong>${esc(x.name)}</strong>${x.dishes.length ? `<span>Stops: ${x.dishes.map(esc).join(", ")}</span>` : ""}</li>`).join("")}</ul>`
+    : `<p class="ms-empty">Nothing is 86'd.</p>`;
+  const from86 = `<div class="sync-line"><span class="sync-dot" aria-hidden="true"></span>${live86 ? "Live from the Ingredients tab" : "As it was when this report was saved"} | <button type="button" class="linkbtn" data-goto="ingredients">Manage 86'd items</button></div>`;
+
+  const byDept = DEPTS.map((dep) => [dep, d.employee.filter((x) => x.dept === dep).length]).filter(([, n]) => n);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
   el.innerHTML = `
     <div class="panel-head">
-      <div><h2>${esc(rest.name)}: MOD report</h2><div class="cat">${r.id ? "Saved report. Changes are kept when you click \"Save report\"." : "New report. Nothing is saved until you click \"Save report\"."}</div></div>
+      <div><h2>${esc(rest.name)}: MOD Report</h2><div class="cat">${r.id ? "Saved report. Changes are kept when you click \"Save report\"." : "New report. Nothing is saved until you click \"Save report\"."}</div></div>
     </div>
-    <div class="form-grid">
+    <div class="form-grid mod-top">
       ${input("Date", "report_date", r.report_date, `type="date" required`)}
       <label>Shift<select data-f="shift">${opts(SHIFTS, r.shift)}</select></label>
       ${input("Manager on duty", "manager", r.manager, `maxlength="100" placeholder="Your name" id="modManager"`)}
-      ${input("Net sales ($)", "data.sales", d.sales, `type="number" min="0" step="0.01" placeholder="From the POS"`)}
     </div>
     ${posEnabled
       ? `<div class="pos-bar"><button class="applybtn" id="pullPosBtn" type="button">Pull again from the POS</button><span class="note"><span id="posNote">${esc(modPosNote || "Covers by hour, net sales, comps, voids and discounts fill in on their own from the POS for this date and these hours.")}</span> You can still edit anything before you save.</span></div>`
       : `<div class="pos-bar off"><span class="note"><strong>Tired of typing these numbers?</strong> The Line POS add-on fills this report from your register in one tap.</span></div>`}
+
+    <div class="mod-hero">
+      <div class="hero-card"><div class="hero-lbl">Covers</div><div class="hero-num mono" id="heroCovers">${s.covers}</div>
+        <div class="hero-sub" id="heroCoversSub"></div></div>
+      <div class="hero-card"><div class="hero-lbl">Net Sales</div><div class="hero-num mono" id="heroSales">${s.sales ? fmt0(s.sales) : "—"}</div>
+        <div class="hero-sub" id="heroSalesSub"></div></div>
+    </div>
     <div class="preview" id="modSummary"></div>
 
-    <div class="mod-section">
-      <div class="section-label">Covers (guests) by hour</div>
-      <div class="toolbar">
-        <label class="stack">First hour<select data-f="data.hours_from">${hourOpts(5, 23, d.hours_from)}</select></label>
-        <label class="stack">Last hour<select data-f="data.hours_to">${hourOpts(d.hours_from, 27, d.hours_to)}</select></label>
-      </div>
-      <table class="hours">
-        <thead><tr><th>Hour</th><th class="num">Covers</th><th></th></tr></thead>
-        <tbody>${hours.map((h) => `<tr data-hrow="${h}"><td>${fmtHour(h)}–${fmtHour(h + 1)}</td>
-          <td class="num"><input type="number" min="0" step="1" inputmode="numeric" class="num mono" data-hour="${h}" value="${esc(d.hourly[h] ?? "")}" placeholder="—" aria-label="Covers ${fmtHour(h)}"></td>
-          <td class="barcell"><span class="hbar" data-bar="${h}"></span></td></tr>`).join("")}</tbody>
-        <tfoot><tr><td>Total</td><td class="num mono" id="coverTotal"></td><td class="note" id="peakNote"></td></tr></tfoot>
-      </table>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Staffing</div>
-      <div class="form-grid">
-        ${input("FOH scheduled", "data.staffing.foh_sched", d.staffing.foh_sched, `type="number" min="0" step="1"`)}
-        ${input("FOH showed up", "data.staffing.foh_actual", d.staffing.foh_actual, `type="number" min="0" step="1"`)}
-        ${input("BOH scheduled", "data.staffing.boh_sched", d.staffing.boh_sched, `type="number" min="0" step="1"`)}
-        ${input("BOH showed up", "data.staffing.boh_actual", d.staffing.boh_actual, `type="number" min="0" step="1"`)}
-      </div>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Employee issues <span class="note" id="empCounts"></span></div>
-      ${rowsTable("employee", [
+    <div class="mod-secs">
+    ${sec("sales", "Covers &amp; Sales", `${plural(s.covers, "cover")} | ${s.sales ? fmt0(s.sales) : "no sales yet"}`, salesView, salesEdit)}
+    ${sec("staff", "Staffing", `${sh.length} on | ${workHrs.toFixed(1)} hrs${late.length ? ` | ${late.length} late` : ""}`, staffView, staffEdit)}
+    ${sec("employee", "Employee Issues", d.employee.length ? plural(d.employee.length, "issue") + (byDept.length ? " | " + byDept.map(([dep, n]) => `${dep} ${n}`).join(", ") : "") : "None",
+      rowsView("employee", (x) => `<div class="ms-row-head"><strong>${esc(x.type || "Issue")}</strong> | ${esc(x.dept)}${x.name ? ` | ${esc(x.name)}` : ""}</div>${x.notes ? `<div>${esc(x.notes)}</div>` : ""}${x.action ? `<div class="ms-sub">Action: ${esc(x.action)}</div>` : ""}`, "No employee issues this shift."),
+      rowsTable("employee", [
         { k: "dept", label: "Department", options: DEPTS },
         { k: "name", label: "Employee", ph: "Name" },
         { k: "type", label: "Issue", options: EMP_ISSUES, blank: "Choose…" },
         { k: "notes", label: "What happened", ph: "e.g. Cut finger on mandoline, 6:40 PM", wide: true },
         { k: "action", label: "Action taken", ph: "e.g. First aid, incident form filed", wide: true },
-      ], "+ Add employee issue", "No employee issues this shift.")}
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Guest issues</div>
-      ${rowsTable("guest", [
+      ], "+ Add employee issue", "No employee issues this shift."))}
+    ${sec("guest", "Guest Issues", d.guest.length ? plural(d.guest.length, "issue") : "None",
+      rowsView("guest", (x) => `<div class="ms-row-head"><strong>${esc(x.type || "Issue")}</strong>${x.table ? ` | ${esc(x.table)}` : ""}</div>${x.notes ? `<div>${esc(x.notes)}</div>` : ""}${x.resolution ? `<div class="ms-sub">Resolved: ${esc(x.resolution)}</div>` : ""}`, "No guest issues this shift.") +
+        `<p class="note">Any injury (guest or employee): write up an incident report tonight, with times and witness names, and tell the owner.</p>`,
+      rowsTable("guest", [
         { k: "type", label: "Issue", options: GUEST_ISSUES, blank: "Choose…" },
         { k: "table", label: "Table / guest", ph: "e.g. Table 12" },
         { k: "notes", label: "What happened", ph: "e.g. Burger ordered medium came out rare", wide: true },
         { k: "resolution", label: "How it was resolved", ph: "e.g. Recooked, comped dessert", wide: true },
-      ], "+ Add guest issue", "No guest issues this shift.")}
-      <p class="note">Any injury (guest or employee): write up an incident report tonight, with times and witness names, and tell the owner.</p>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Comps, voids &amp; refunds <span class="note" id="compTotal"></span></div>
-      ${rowsTable("comps", [
+      ], "+ Add guest issue", "No guest issues this shift."))}
+    ${sec("comps", "Comps, Voids &amp; Refunds", s.comps ? `${fmt(s.comps)}${s.sales ? ` | ${fmtPct((s.comps / s.sales) * 100)} of sales` : ""}` : "None",
+      d.comps.length ? `<div class="scroll-x"><table class="sched"><thead><tr><th>Type</th><th>Item</th><th>Reason</th><th>Approved by</th><th class="num">Amount</th></tr></thead>
+        <tbody>${d.comps.map((x) => `<tr><td>${esc(x.type)}</td><td>${esc(x.item)}</td><td>${esc(x.reason)}</td><td>${esc(x.approved)}</td><td class="num mono">${x.amount ? fmt(Number(x.amount)) : "—"}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="4">Total</td><td class="num mono">${fmt(s.comps)}</td></tr></tfoot></table></div>` : `<p class="ms-empty">No comps or voids this shift.</p>`,
+      rowsTable("comps", [
         { k: "type", label: "Type", options: COMP_TYPES, blank: "Choose…" },
         { k: "item", label: "Item(s)", ph: "e.g. Sticky Toffee Pudding" },
         { k: "amount", label: "Amount ($)", money: true },
         { k: "reason", label: "Reason", ph: "e.g. Recook for Table 12", wide: true },
         { k: "approved", label: "Approved by", ph: "Manager" },
-      ], "+ Add comp / void", "No comps or voids this shift.")}
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Kitchen &amp; building</div>
-      <div class="form-grid">
-        ${area("86'd items &amp; low stock", "data.eighty_six", d.eighty_six, "e.g. Fish & Chips 86'd at 9:15 PM, cod short 10 lb")}
-        ${area("Equipment &amp; maintenance", "data.maintenance", d.maintenance, "e.g. Walk-in door gasket torn; fryer 2 slow to heat")}
-      </div>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Cash &amp; closing</div>
-      <div class="form-grid">
-        ${input("Cash over (+) / short (−) ($)", "data.cash_over_short", d.cash_over_short, `type="number" step="0.01" placeholder="0.00"`)}
-      </div>
-      <div class="checks">${CHECKS.map(([k, label]) => `<label class="check"><input type="checkbox" data-f="data.checks.${k}" ${d.checks[k] ? "checked" : ""}> ${label}</label>`).join("")}</div>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Forecast for tomorrow's shift (${tomorrow})</div>
-      ${refStats ? `<p class="note">Last ${tomorrow}'s ${esc(r.shift)}: ${refStats.covers} covers${refStats.sales ? `, ${fmt0(refStats.sales)} in sales` : ""}.</p>` : ""}
-      <div class="form-grid">
+      ], "+ Add comp / void", "No comps or voids this shift."))}
+    ${sec("kitchen", "86'd Items &amp; Kitchen", e86.length ? `${e86.length} 86'd` : "Nothing 86'd",
+      from86 + list86 + field("Other kitchen notes", d.eighty_six) + field("Equipment &amp; maintenance", d.maintenance),
+      from86 + list86 + `<div class="form-grid">
+        ${area("Other kitchen notes", "data.eighty_six", d.eighty_six, "e.g. Running low on cod, 10 lb left")}
+        ${area("Equipment &amp; maintenance", "data.maintenance", d.maintenance, "e.g. Walk-in door gasket torn; fryer 2 slow to heat")}</div>`)}
+    ${sec("cash", "Cash &amp; Closing", `${CHECKS.filter(([k]) => d.checks[k]).length} of ${CHECKS.length} done`,
+      `<div class="ms-field"><div class="ms-lbl">Cash over (+) / short (−)</div><p class="ms-text mono">${d.cash_over_short === "" || d.cash_over_short == null ? "—" : fmt(Number(d.cash_over_short))}</p></div>
+       <ul class="ms-checks">${CHECKS.map(([k, label]) => `<li class="${d.checks[k] ? "done" : ""}">${d.checks[k] ? "✓" : "○"} ${label}</li>`).join("")}</ul>`,
+      `<div class="form-grid">${input("Cash over (+) / short (−) ($)", "data.cash_over_short", d.cash_over_short, `type="number" step="0.01" placeholder="0.00"`)}</div>
+       <div class="checks">${CHECKS.map(([k, label]) => `<label class="check"><input type="checkbox" data-f="data.checks.${k}" ${d.checks[k] ? "checked" : ""}> ${label}</label>`).join("")}</div>`)}
+    ${sec("forecast", `Forecast for Tomorrow (${tomorrow})`, d.forecast.covers || d.forecast.sales ? `${d.forecast.covers ? plural(Number(d.forecast.covers), "cover") : ""}${d.forecast.covers && d.forecast.sales ? " | " : ""}${d.forecast.sales ? fmt0(Number(d.forecast.sales)) : ""}` : "Not filled in",
+      (refStats ? `<p class="note">Last ${tomorrow}'s ${esc(r.shift)}: ${refStats.covers} covers${refStats.sales ? `, ${fmt0(refStats.sales)} in sales` : ""}.</p>` : "") +
+      `<div class="ms-pair"><div class="ms-field"><div class="ms-lbl">Expected covers</div><p class="ms-text mono">${esc(d.forecast.covers) || "—"}</p></div>
+       <div class="ms-field"><div class="ms-lbl">Expected sales</div><p class="ms-text mono">${d.forecast.sales ? fmt0(Number(d.forecast.sales)) : "—"}</p></div></div>` +
+      field("Reservations &amp; large parties", d.forecast.reservations) + field("Events, weather &amp; outside factors", d.forecast.events) +
+      field("Staffing plan", d.forecast.staffing) + field("Prep &amp; ordering", d.forecast.prep),
+      (refStats ? `<p class="note">Last ${tomorrow}'s ${esc(r.shift)}: ${refStats.covers} covers${refStats.sales ? `, ${fmt0(refStats.sales)} in sales` : ""}.</p>` : "") +
+      `<div class="form-grid">
         ${input("Expected covers", "data.forecast.covers", d.forecast.covers, `type="number" min="0" step="1"`)}
         ${input("Expected sales ($)", "data.forecast.sales", d.forecast.sales, `type="number" min="0" step="1"`)}
         ${area("Reservations &amp; large parties", "data.forecast.reservations", d.forecast.reservations, "e.g. Party of 14 at 7 PM")}
         ${area("Events, weather &amp; outside factors", "data.forecast.events", d.forecast.events, "e.g. Home game ends 6:30 PM, expect a rush")}
         ${area("Staffing plan", "data.forecast.staffing", d.forecast.staffing, "e.g. Add a 4th server 6–10 PM")}
         ${area("Prep &amp; ordering", "data.forecast.prep", d.forecast.prep, "e.g. Double batch of batter; confirm cod delivery")}
-      </div>
-    </div>
-
-    <div class="mod-section">
-      <div class="section-label">Shift notes</div>
-      <div class="form-grid">
+      </div>`)}
+    ${sec("notes", "Shift Notes", [d.summary, d.wins, d.followups].filter((x) => String(x || "").trim()).length ? "Written" : "Not filled in",
+      field("Shift summary", d.summary) + field("Wins &amp; shout-outs", d.wins) + field("Follow-ups for the next manager", d.followups),
+      `<div class="form-grid">
         ${area("Shift summary", "data.summary", d.summary, "How the shift went overall")}
         ${area("Wins &amp; shout-outs", "data.wins", d.wins, "Who went above and beyond")}
         ${area("Follow-ups for the next manager", "data.followups", d.followups, "What needs to happen next")}
-      </div>
+      </div>`)}
     </div>
 
     <div class="row-actions">
@@ -1946,6 +2184,7 @@ function renderModEditor() {
       <span class="spacer"></span>
       ${r.id ? `<button class="linkbtn danger" id="deleteReportBtn" type="button">Delete report</button>` : ""}
     </div>`;
+  el.dataset.lw = lw ? JSON.stringify({ day: lwDay, covers: lw.covers, sales: lw.sales }) : "";
   updateModSummary();
 }
 
@@ -1958,20 +2197,29 @@ function updateModSummary() {
     bar.style.width = `${(c / max) * 100}%`;
     bar.closest("tr").classList.toggle("peak", !!s.peak && c === s.peak.covers);
   });
-  $("coverTotal").textContent = s.covers;
-  $("peakNote").textContent = s.peak
-    ? `Peak: ${fmtHour(s.peak.h)} (${s.peak.covers})` + (s.rush ? ` · busiest 2 hours: ${fmtHour(s.rush.h)}–${fmtHour(s.rush.h + 2)} (${s.rush.covers})` : "")
-    : "";
-  const byDept = DEPTS.map((dep) => [dep, d.employee.filter((x) => x.dept === dep).length]).filter(([, n]) => n);
-  $("empCounts").textContent = byDept.length ? "· " + byDept.map(([dep, n]) => `${dep}: ${n}`).join(" · ") : "";
-  $("compTotal").textContent = s.comps ? `· ${fmt(s.comps)} total` + (s.sales ? ` (${fmtPct((s.comps / s.sales) * 100)} of sales)` : "") : "";
-  $("modSummary").innerHTML = `
-    <div><div class="val mono">${s.covers}</div><div class="lbl">Covers</div></div>
-    <div><div class="val mono">${s.sales ? fmt0(s.sales) : "—"}</div><div class="lbl">Net sales</div></div>
-    <div><div class="val mono">${s.avgCheck ? fmt(s.avgCheck) : "—"}</div><div class="lbl">Average per guest</div></div>
+  const set = (id, html) => { const x = $(id); if (x) x.innerHTML = html; };
+  set("coverTotal", String(s.covers));
+  set("peakNote", s.peak
+    ? `Peak: ${fmtHour(s.peak.h)} (${s.peak.covers})` + (s.rush ? ` | busiest 2 hours: ${fmtHour(s.rush.h)}–${fmtHour(s.rush.h + 2)} (${s.rush.covers})` : "")
+    : "");
+  // The two numbers that matter most, big, with last week's same shift beside them.
+  let lw = null; try { lw = JSON.parse($("modEditor").dataset.lw || "null"); } catch { /* none */ }
+  const vs = (now, then, money) => {
+    if (!then) return "";
+    const diff = now - then, pct = (diff / then) * 100;
+    return `<span class="${diff >= 0 ? "up" : "down"}">${diff >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)}%</span> vs. last ${lw.day} (${money ? fmt0(then) : then})`;
+  };
+  set("heroCovers", String(s.covers));
+  set("heroSales", s.sales ? fmt0(s.sales) : "—");
+  set("heroCoversSub", [s.peak ? `Peak ${fmtHour(s.peak.h)} (${s.peak.covers})` : "", lw ? vs(s.covers, lw.covers, false) : ""].filter(Boolean).join(" | "));
+  set("heroSalesSub", [s.avgCheck ? `${fmt(s.avgCheck)} per guest` : "", lw && s.sales ? vs(s.sales, lw.sales, true) : ""].filter(Boolean).join(" | "));
+  const badge = document.querySelector('#modEditor [data-badge="sales"]');
+  if (badge) badge.textContent = `${s.covers} cover${s.covers === 1 ? "" : "s"} | ${s.sales ? fmt0(s.sales) : "no sales yet"}`;
+  set("modSummary", `
     <div><div class="val mono">${s.peak ? fmtHour(s.peak.h) : "—"}</div><div class="lbl">Peak hour</div></div>
+    <div><div class="val mono">${s.avgCheck ? fmt(s.avgCheck) : "—"}</div><div class="lbl">Average per guest</div></div>
     <div><div class="val mono">${fmt(s.comps)}</div><div class="lbl">Comps &amp; voids</div></div>
-    <div><div class="val mono">${s.emp + s.guest}</div><div class="lbl">Issues${s.injuries ? ` (${s.injuries} injury)` : ""}</div></div>`;
+    <div><div class="val mono">${s.emp + s.guest}</div><div class="lbl">Issues${s.injuries ? ` (${s.injuries} injury)` : ""}</div></div>`);
 }
 
 function setPath(obj, path, val) {
@@ -1992,6 +2240,11 @@ async function saveReport() {
     if (data[k].some((row) => !row.type)) { toast(`Pick a type for every line under ${k === "comps" ? "Comps, voids & refunds" : k === "guest" ? "Guest issues" : "Employee issues"}.`, "err"); return; }
   }
   data.hourly = Object.fromEntries(Object.entries(data.hourly).filter(([h, v]) => h >= data.hours_from && h <= data.hours_to && String(v).trim() !== ""));
+  // Head counts from the synced schedule, and what was 86'd, kept with the report.
+  const sh = data.shifts || [];
+  const count = (dept, worked) => sh.filter((x) => (dept === "FOH" ? x.dept === "FOH" : x.dept !== "FOH") && (!worked || x.in)).length;
+  data.staffing = { foh_sched: count("FOH"), foh_actual: count("FOH", true), boh_sched: count("BOH"), boh_actual: count("BOH", true) };
+  data.eighty_six_items = eightySixFor(r);
   const row = { restaurant_id: rest.id, report_date: r.report_date, shift: r.shift, manager: r.manager.trim(), data, updated_at: new Date().toISOString() };
   const btn = $("saveReportBtn");
   btn.disabled = true;
@@ -2009,6 +2262,15 @@ async function saveReport() {
     renderMod();
     toast(`Saved the ${r.shift} report for ${fmtReportDay(r.report_date)}.`);
   } finally { if (document.body.contains(btn)) btn.disabled = false; }
+}
+
+// Print the whole report: open every section first, then put them back.
+function printReport() {
+  const secs = [...document.querySelectorAll("#modEditor details.mod-sec")];
+  const was = secs.map((x) => x.open);
+  secs.forEach((x) => { x.open = true; });
+  window.print();
+  secs.forEach((x, i) => { x.open = was[i]; });
 }
 
 async function deleteReport() {
@@ -2054,6 +2316,7 @@ function renderSpecials() {
   $("partyFields").classList.toggle("hidden", menuMode !== "party");
   $("eventFields").classList.toggle("hidden", menuMode !== "event");
   $("freeFields").classList.toggle("hidden", menuMode !== "free");
+  renderColorPreview();
   if (lastMenu) renderMenuResult(); else $("menuResult").classList.add("hidden");
 }
 
@@ -2069,8 +2332,10 @@ function menuRequest() {
     }),
   };
   const colors = $("menuColors").value.trim();
-  body.colors = colors;
-  body.colors_hex = parseColors(colors);
+  const pal = menuPalette();
+  body.colors = colors || pal.label;
+  body.colors_hex = pal.hex;
+  body.teams = pal.teams.map((t) => ({ name: t.name, colors: t.colors.map(([n, h]) => `${n} ${h}`) }));
   body.avoid = recentDishes.slice(0, 24);
   if (menuMode === "free") {
     body.brief = $("fsBrief").value;
@@ -2084,6 +2349,92 @@ function menuRequest() {
     body.notes = $("spNotes").value;
   }
   return body;
+}
+
+// Official colors for teams people plan game days around: every NFL team and
+// the SEC. If the owner leaves Colors blank and names a team, its real colors
+// are used. [match words, name, [[color name, hex], ...]]
+const TEAMS = [
+  [["cardinals"], "Arizona Cardinals", [["cardinal red", "#97233F"], ["black", "#000000"], ["gold", "#FFB612"]], ["st. louis", "louisville"]],
+  [["falcons"], "Atlanta Falcons", [["red", "#A71930"], ["black", "#000000"], ["silver", "#A5ACAF"]]],
+  [["ravens"], "Baltimore Ravens", [["purple", "#241773"], ["black", "#000000"], ["gold", "#9E7C0C"]]],
+  [["bills"], "Buffalo Bills", [["royal blue", "#00338D"], ["red", "#C60C30"], ["white", "#FFFFFF"]]],
+  [["panthers"], "Carolina Panthers", [["process blue", "#0085CA"], ["black", "#101820"], ["silver", "#BFC0BF"]]],
+  [["bears"], "Chicago Bears", [["navy", "#0B162A"], ["orange", "#C83803"], ["white", "#FFFFFF"]]],
+  [["bengals"], "Cincinnati Bengals", [["orange", "#FB4F14"], ["black", "#000000"], ["white", "#FFFFFF"]]],
+  [["browns"], "Cleveland Browns", [["brown", "#311D00"], ["orange", "#FF3C00"], ["white", "#FFFFFF"]]],
+  [["cowboys"], "Dallas Cowboys", [["royal blue", "#003594"], ["navy", "#041E42"], ["silver", "#869397"]]],
+  [["broncos"], "Denver Broncos", [["orange", "#FB4F14"], ["navy", "#002244"], ["white", "#FFFFFF"]]],
+  [["lions"], "Detroit Lions", [["Honolulu blue", "#0076B6"], ["silver", "#B0B7BC"], ["white", "#FFFFFF"]]],
+  [["packers"], "Green Bay Packers", [["green", "#203731"], ["gold", "#FFB612"], ["white", "#FFFFFF"]]],
+  [["texans"], "Houston Texans", [["deep steel blue", "#03202F"], ["battle red", "#A71930"], ["white", "#FFFFFF"]]],
+  [["colts"], "Indianapolis Colts", [["speed blue", "#002C5F"], ["white", "#FFFFFF"], ["gray", "#A2AAAD"]]],
+  [["jaguars", "jags"], "Jacksonville Jaguars", [["teal", "#006778"], ["gold", "#D7A22A"], ["black", "#101820"]]],
+  [["chiefs"], "Kansas City Chiefs", [["red", "#E31837"], ["gold", "#FFB81C"], ["white", "#FFFFFF"]]],
+  [["raiders"], "Las Vegas Raiders", [["silver", "#A5ACAF"], ["black", "#000000"], ["white", "#FFFFFF"]]],
+  [["chargers"], "Los Angeles Chargers", [["powder blue", "#0080C6"], ["sunshine gold", "#FFC20E"], ["white", "#FFFFFF"]]],
+  [["rams"], "Los Angeles Rams", [["royal blue", "#003594"], ["sol yellow", "#FFD100"], ["white", "#FFFFFF"]]],
+  [["dolphins", "fins"], "Miami Dolphins", [["aqua", "#008E97"], ["orange", "#FC4C02"], ["white", "#FFFFFF"]]],
+  [["vikings"], "Minnesota Vikings", [["purple", "#4F2683"], ["gold", "#FFC62F"], ["white", "#FFFFFF"]]],
+  [["patriots", "pats"], "New England Patriots", [["navy", "#002244"], ["red", "#C60C30"], ["silver", "#B0B7BC"]]],
+  [["saints"], "New Orleans Saints", [["old gold", "#D3BC8D"], ["black", "#101820"], ["white", "#FFFFFF"]]],
+  [["giants"], "New York Giants", [["royal blue", "#0B2265"], ["red", "#A71930"], ["white", "#FFFFFF"]]],
+  [["jets"], "New York Jets", [["gotham green", "#125740"], ["white", "#FFFFFF"], ["black", "#000000"]]],
+  [["eagles"], "Philadelphia Eagles", [["midnight green", "#004C54"], ["silver", "#A5ACAF"], ["black", "#000000"]]],
+  [["steelers"], "Pittsburgh Steelers", [["gold", "#FFB612"], ["black", "#101820"], ["white", "#FFFFFF"]]],
+  [["49ers", "niners"], "San Francisco 49ers", [["red", "#AA0000"], ["gold", "#B3995D"], ["white", "#FFFFFF"]]],
+  [["seahawks"], "Seattle Seahawks", [["college navy", "#002244"], ["action green", "#69BE28"], ["wolf gray", "#A5ACAF"]]],
+  [["buccaneers", "bucs"], "Tampa Bay Buccaneers", [["red", "#D50A0A"], ["pewter", "#34302B"], ["orange", "#FF7900"]]],
+  [["titans"], "Tennessee Titans", [["navy", "#0C2340"], ["titans blue", "#4B92DB"], ["red", "#C8102E"]]],
+  [["commanders"], "Washington Commanders", [["burgundy", "#5A1414"], ["gold", "#FFB612"], ["white", "#FFFFFF"]]],
+  [["vols", "volunteers", "tennessee", "rocky top", "neyland"], "Tennessee Volunteers", [["Tennessee orange", "#FF8200"], ["white", "#FFFFFF"], ["Smokey gray", "#58595B"]], ["titans", "tennessee state", "middle tennessee", "east tennessee"]],
+  [["kentucky", "uk wildcats"], "Kentucky Wildcats", [["Kentucky blue", "#0033A0"], ["white", "#FFFFFF"]], ["western kentucky", "eastern kentucky", "northern kentucky"]],
+  [["alabama", "crimson tide", "roll tide", "bama"], "Alabama Crimson Tide", [["crimson", "#9E1B32"], ["white", "#FFFFFF"], ["gray", "#828A8F"]], ["alabama state", "south alabama", "uab"]],
+  [["georgia bulldogs", "uga", "dawgs"], "Georgia Bulldogs", [["red", "#BA0C2F"], ["black", "#000000"], ["silver", "#9EA2A2"]]],
+  [["gators", "florida"], "Florida Gators", [["blue", "#0021A5"], ["orange", "#FA4616"], ["white", "#FFFFFF"]], ["florida state", "fsu", "south florida", "florida atlantic", "florida international"]],
+  [["lsu", "geaux tigers"], "LSU Tigers", [["purple", "#461D7C"], ["gold", "#FDD023"], ["white", "#FFFFFF"]]],
+  [["auburn", "war eagle"], "Auburn Tigers", [["navy", "#0C2340"], ["orange", "#E87722"], ["white", "#FFFFFF"]]],
+  [["ole miss", "rebels"], "Ole Miss Rebels", [["red", "#CE1126"], ["navy", "#14213D"], ["white", "#FFFFFF"]]],
+  [["mississippi state", "miss state"], "Mississippi State Bulldogs", [["maroon", "#660000"], ["white", "#FFFFFF"]]],
+  [["razorbacks", "arkansas", "hogs"], "Arkansas Razorbacks", [["cardinal", "#9D2235"], ["white", "#FFFFFF"]], ["arkansas state"]],
+  [["gamecocks", "south carolina"], "South Carolina Gamecocks", [["garnet", "#73000A"], ["black", "#000000"], ["white", "#FFFFFF"]]],
+  [["mizzou", "missouri"], "Missouri Tigers", [["gold", "#F1B82D"], ["black", "#000000"], ["white", "#FFFFFF"]], ["missouri state"]],
+  [["texas a&m", "aggies", "a&m"], "Texas A&M Aggies", [["maroon", "#500000"], ["white", "#FFFFFF"]]],
+  [["longhorns", "texas"], "Texas Longhorns", [["burnt orange", "#BF5700"], ["white", "#FFFFFF"]], ["texas a&m", "texas tech", "north texas", "texas state", "utep", "utsa", "a&m", "texans"]],
+  [["sooners", "oklahoma"], "Oklahoma Sooners", [["crimson", "#841617"], ["cream", "#FDF9D8"]], ["oklahoma state"]],
+  [["commodores", "vanderbilt", "vandy"], "Vanderbilt Commodores", [["black", "#000000"], ["gold", "#866D4B"], ["white", "#FFFFFF"]]],
+];
+// Teams named in the text, in the order they're named.
+function teamsIn(text) {
+  const t = " " + String(text || "").toLowerCase().replace(/[^a-z0-9&. ]+/g, " ").replace(/\s+/g, " ") + " ";
+  const found = [];
+  for (const [keys, name, colors, unless = []] of TEAMS) {
+    if (unless.some((u) => t.includes(` ${u} `))) continue;
+    const at = Math.min(...keys.map((k) => { const i = t.indexOf(` ${k} `); return i < 0 ? Infinity : i; }));
+    if (at < Infinity) found.push({ at, name, colors });
+  }
+  return found.sort((a, b) => a.at - b.at).slice(0, 2);
+}
+// What colors the next menu will use: the owner's own (typed in Colors), or
+// the first team's colors plus the other team's main color.
+function menuPalette() {
+  const typed = $("menuColors").value.trim();
+  const words = menuMode === "event" ? `${$("evName").value} ${$("evPersonal").value}` : menuMode === "party" ? `${$("ptType").value} ${$("ptPersonal").value}`
+    : menuMode === "free" ? $("fsBrief").value : $("spNotes").value;
+  const teams = teamsIn(words);
+  if (typed) return { hex: parseColors(typed), teams, label: typed, from: "typed" };
+  if (!teams.length) return { hex: [], teams, label: "", from: "" };
+  const [a, b] = teams;
+  const hex = [...new Set([...a.colors.map((c) => c[1]), ...(b ? [b.colors[0][1]] : [])])];
+  return { hex, teams, label: teams.map((t) => `${t.name}: ${t.colors.map((c) => c[0]).join(", ")}`).join("; "), from: "teams" };
+}
+function renderColorPreview() {
+  const p = menuPalette(), el = $("colorPreview");
+  if (!p.hex.length) { el.innerHTML = p.from === "typed" ? `<span class="cp-note">Couldn't match those colors. Try plain names like "navy and gold" or codes like #FF8200.</span>` : ""; return; }
+  const chips = (list) => list.map(([n, h]) => `<span class="cp-chip"><span class="cp-sw" style="background:${h}"></span>${esc(n)}</span>`).join("");
+  el.innerHTML = p.from === "teams"
+    ? p.teams.map((t, i) => `<div class="cp-row"><span class="cp-team">${esc(t.name)}${i === 0 ? "" : " (accent)"}</span>${chips(i === 0 ? t.colors : t.colors.slice(0, 1))}</div>`).join("") + `<span class="cp-note">Official team colors. Type your own in Colors to change them.</span>`
+    : `<div class="cp-row">${chips(p.hex.map((h) => [h, h]))}</div>`;
 }
 
 // Turn "orange and white" or "#FF8200, navy" into exact hex codes, so the
@@ -2121,7 +2472,43 @@ function parseColors(text) {
   return [...new Set(found.sort((a, b) => a.at - b.at).map((f) => f.hex))].slice(0, 6);
 }
 
-async function makeMenu(again = false) {
+// "Show me 3 ideas first": three different directions to pick from.
+let lastIdeas = null;
+async function showIdeas() {
+  if (!ingredients.size) { toast("Add some ingredients first.", "err"); return; }
+  if (menuMode === "event" && !$("evName").value.trim()) { toast("Say what the event is first.", "err"); $("evName").focus(); return; }
+  if (menuMode === "free" && !$("fsBrief").value.trim()) { toast("Throw in a few words first: a theme, a guest, a mood, anything.", "err"); $("fsBrief").focus(); return; }
+  const btn = $("ideasBtn"), note = $("makeMenuNote");
+  btn.disabled = true; $("makeMenuBtn").disabled = true; note.textContent = "Looking it up and thinking of 3 ideas…";
+  $("makeMenuBlade").classList.remove("hidden");
+  try {
+    const { data } = await sb.auth.getSession();
+    const request = { ...menuRequest(), action: "ideas" };
+    const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` }, body: JSON.stringify(request) });
+    const out = await r.json().catch(() => ({}));
+    note.textContent = "";
+    if (!r.ok) { toast(out.error || "Something went wrong. Try again.", "err"); return; }
+    lastIdeas = out;
+    const el = $("ideasResult");
+    el.classList.remove("hidden");
+    el.innerHTML = `<div class="chart-head"><h3>Pick an Idea</h3><span class="note">Each one becomes a full menu, priced and costed</span></div>
+      <div class="ideas">${out.ideas.map((x, i) => `<article class="idea">
+        ${Array.isArray(x.colors) && x.colors.length ? `<div class="idea-sw">${x.colors.filter((c) => HEX.test(c)).slice(0, 3).map((c) => `<span style="background:${c}"></span>`).join("")}</div>` : ""}
+        <h4>${esc(x.title)}</h4><p>${esc(x.pitch)}</p>
+        <ul>${(x.dishes || []).slice(0, 5).map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+        ${x.decor ? `<p class="idea-decor"><strong>Decor:</strong> ${esc(x.decor)}</p>` : ""}
+        <button class="applybtn" data-idea="${i}" type="button">Make this menu</button></article>`).join("")}</div>
+      ${sourcesLine(out.sources)}`;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch { note.textContent = ""; toast("Couldn't reach the menu assistant. Check your internet and try again.", "err"); }
+  finally { btn.disabled = false; $("makeMenuBtn").disabled = false; $("makeMenuBlade").classList.add("hidden"); }
+}
+function sourcesLine(sources) {
+  return Array.isArray(sources) && sources.length
+    ? `<p class="note sources">Checked with Google Search: ${sources.map((x) => `<a href="${esc(x.uri)}" target="_blank" rel="noopener">${esc(x.title || "source")}</a>`).join(" | ")}</p>` : "";
+}
+
+async function makeMenu(again = false, idea = null) {
   if (!ingredients.size) { toast("Add some ingredients first.", "err"); return; }
   if (menuMode === "event" && !$("evName").value.trim()) { toast("Say what the event is first.", "err"); $("evName").focus(); return; }
   if (menuMode === "free" && !$("fsBrief").value.trim()) { toast("Throw in a few words first: a theme, a guest, a mood, anything.", "err"); $("fsBrief").focus(); return; }
@@ -2131,6 +2518,7 @@ async function makeMenu(again = false) {
   try {
     const { data } = await sb.auth.getSession();
     const request = menuRequest();
+    if (idea) request.idea = idea;
     const r = await fetch("/api/specials", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
@@ -2318,7 +2706,7 @@ function renderMenuResult() {
       ${band(1)}
       ${lastMenu.picture ? `<img class="mp-picture" src="${lastMenu.picture}" alt="">` : ""}
       ${motifs.length ? `<div class="mp-motifs">${motifs.map((m, i) => motifSvg(m, i % 2 ? "var(--mp-accent2)" : "var(--mp-accent)")).join("")}</div>` : ""}
-      <div class="mp-kicker">${esc(rest.name)}${kicker ? ` · ${esc(kicker)}` : ""}</div>
+      <div class="mp-kicker">${esc(rest.name)}${kicker ? ` | ${esc(kicker)}` : ""}</div>
       <h3 class="mp-title">${esc(menu.title)}</h3>
       ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
       <div class="mp-items">${menu.items.map((it) => `<div class="mp-item">
@@ -2355,7 +2743,8 @@ function renderMenuResult() {
   const el = $("menuResult");
   el.classList.remove("hidden");
   el.innerHTML = `
-    <div class="chart-head"><h3>Your menu</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
+    <div class="chart-head"><h3>Your Menu</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
+    ${sourcesLine(lastMenu.sources)}
     ${poster}
     <div class="menu-look" role="group" aria-label="Change the menu's look">
       <label>Background<input type="color" data-look="bg" value="${th.bg}"></label>
@@ -2390,10 +2779,16 @@ function renderMenuResult() {
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voice = null;   // the one recording in progress: { rec, btn }
 
+// A microphone button for a text box drawn by JavaScript. Put it and the box
+// inside <span class="voice-field">.
+const MIC_SVG = `<svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>`;
+const micBtn = () => `<button type="button" class="ghostbtn mic-btn" aria-pressed="false" aria-label="Speak instead of typing" title="Speak instead of typing"${SpeechRec ? "" : " hidden"}>${MIC_SVG}</button>`;
+
 function setVoiceButton(btn, listening) {
   btn.classList.toggle("listening", listening);
   btn.setAttribute("aria-pressed", String(listening));
-  btn.querySelector(".mic-text").textContent = listening ? "Listening… tap to stop" : "Speak";
+  btn.setAttribute("aria-label", listening ? "Listening. Tap to stop." : "Speak instead of typing");
+  btn.title = listening ? "Listening… tap to stop" : "Speak instead of typing";
 }
 
 function toggleVoice(btn) {
@@ -2402,7 +2797,8 @@ function toggleVoice(btn) {
     voice.rec.stop();
     if (same) return;
   }
-  const input = $(btn.dataset.voiceFor);
+  const input = $(btn.dataset.voiceFor) || btn.closest(".voice-field")?.querySelector("input, textarea");
+  if (!input) return;
   const rec = new SpeechRec();
   rec.lang = navigator.language || "en-US";
   rec.interimResults = true;
@@ -2412,7 +2808,8 @@ function toggleVoice(btn) {
   rec.onresult = (e) => {
     let said = "";
     for (const r of e.results) said += r[0].transcript;
-    input.value = ((before ? before + " " : "") + said.trim()).slice(0, input.maxLength > 0 ? input.maxLength : 300);
+    input.value = ((before ? before + " " : "") + said.trim()).slice(0, input.maxLength > 0 ? input.maxLength : 2000);
+    input.dispatchEvent(new Event("input", { bubbles: true }));   // so forms that save as you type see it
   };
   rec.onerror = (e) => {
     if (e.error === "not-allowed" || e.error === "service-not-allowed") toast("Allow microphone access for this site to use voice typing.", "err");
@@ -2756,9 +3153,11 @@ function goTo(page) {
     if (!confirm("You have unsaved changes to this report. Leave without saving?")) return;
     modDirty = false; modDraft = null; editingReportId = null;
   }
+  const toTonight = page === "home" && activePage !== "home";
   activePage = page;
   window.scrollTo({ top: 0 });
   render();
+  if (toTonight) playLogoSplice($("headerLogo"));
 }
 
 function wireControls() {
@@ -2874,6 +3273,17 @@ function wireControls() {
   $("addIngForm").addEventListener("submit", addIngredient);
   $("ingSearch").addEventListener("input", renderIngredients);
   $("ingTable").addEventListener("change", (e) => { if (e.target.matches("input[data-id]")) updateIngredient(e.target); });
+  $("invoiceFile").addEventListener("change", (e) => scanInvoice(e.target.files[0]));
+  $("invoiceResult").addEventListener("input", (e) => {
+    const t = e.target; if (t.dataset.inv === undefined || !invoiceDraft) return;
+    invoiceDraft.rows[+t.dataset.inv][t.dataset.k] = t.type === "checkbox" ? t.checked : t.value;
+    if (t.type === "checkbox" || t.dataset.k === "name") { const at = t.selectionStart; renderInvoice(); const again = document.querySelector(`#invoiceResult [data-inv="${t.dataset.inv}"][data-k="${t.dataset.k}"]`); if (again && t.type !== "checkbox") { again.focus(); try { again.setSelectionRange(at, at); } catch { /* ok */ } } }
+  });
+  $("invoiceResult").addEventListener("click", (e) => {
+    if (e.target.closest("#invoiceSave")) saveInvoice();
+    else if (e.target.closest("#invoiceCancel")) { invoiceDraft = null; renderInvoice(); }
+  });
+  $("page-ingredients").addEventListener("click", (e) => { const b = e.target.closest("[data-86]"); if (b && b.dataset["86"]) toggle86(b.dataset["86"]); });
   $("ingTable").addEventListener("click", (e) => {
     const b = e.target.closest("[data-del-ing]");
     if (b) deleteIngredient(b.dataset.delIng);
@@ -2908,15 +3318,22 @@ function wireControls() {
     else if (t.id === "revertDishBtn") { draftDirty = false; startEditing(draft.id); renderRecipeEditor(); }
   });
 
-  // Voice typing for the "Anything to keep in mind" boxes
-  document.querySelectorAll("[data-voice-for]").forEach((btn) => {
-    btn.hidden = !SpeechRec;
-    btn.addEventListener("click", (e) => { e.preventDefault(); toggleVoice(btn); });
+  // Voice typing: a microphone button beside every text box (some are drawn later, so listen on the page)
+  document.querySelectorAll("[data-voice-for]").forEach((btn) => { btn.hidden = !SpeechRec; });
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".mic-btn");
+    if (btn) { e.preventDefault(); toggleVoice(btn); }
   });
 
   // Specials
   document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { if (voice) voice.rec.stop(); menuMode = b.dataset.mode; renderSpecials(); }));
   $("makeMenuBtn").addEventListener("click", () => makeMenu(false));
+  $("ideasBtn").addEventListener("click", showIdeas);
+  $("ideasResult").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-idea]");
+    if (b && lastIdeas) { const x = lastIdeas.ideas[+b.dataset.idea]; makeMenu(false, { title: x.title, pitch: x.pitch, dishes: x.dishes }); }
+  });
+  ["menuColors", "evName", "evPersonal", "ptType", "ptPersonal", "fsBrief", "spNotes"].forEach((id) => $(id).addEventListener("input", renderColorPreview));
   $("menuResult").addEventListener("input", (e) => {
     const k = e.target.dataset.look;
     if (!k || !lastMenu || e.target.type !== "color") return;
@@ -2991,8 +3408,9 @@ function wireControls() {
         return;
       }
       if (f === "shift" && SHIFT_HOURS[val]) {
-        // A new shift brings its usual hours, then the POS numbers for them.
+        // A new shift brings its usual hours, its schedule, then the POS numbers for them.
         modDraft.shift = val;
+        if (!modDraft.data.shifts_edited) modDraft.data.shifts = null;
         [modDraft.data.hours_from, modDraft.data.hours_to] = SHIFT_HOURS[val];
         modDirty = true;
         renderModEditor();
@@ -3000,26 +3418,46 @@ function wireControls() {
         return;
       }
       setPath(modDraft, f, val);
+      if (f === "report_date" && val && !modDraft.data.shifts_edited) { modDraft.data.shifts = null; modDirty = true; renderModEditor(); }
       if (f === "report_date" && posEnabled && val) { modDirty = true; pullMod(true); }
     } else if (t.dataset.row) {
       modDraft.data[t.dataset.row][+t.dataset.i][t.dataset.k] = val;
     } else if (t.dataset.hour !== undefined) {
       modDraft.data.hourly[t.dataset.hour] = val;
+    } else if (t.dataset.shift !== undefined) {
+      const x = modDraft.data.shifts[+t.dataset.shift];
+      x[t.dataset.k] = val;
+      modDraft.data.shifts_edited = true;
+      const cell = document.querySelector(`#modEditor [data-shift-hrs="${t.dataset.shift}"]`);
+      if (cell) cell.textContent = shiftHours(x.in, x.out).toFixed(2);
     } else return;
     modDirty = true;
     updateModSummary();
   };
   mod.addEventListener("input", onModInput);
   mod.addEventListener("change", (e) => { if (e.target.tagName === "SELECT" || e.target.type === "checkbox") onModInput(e); });
+  // Remember which sections are open while the report is redrawn.
+  mod.addEventListener("toggle", (e) => {
+    const sec = e.target.closest?.("details[data-sec]");
+    if (sec) sec.open ? modOpen.add(sec.dataset.sec) : modOpen.delete(sec.dataset.sec);
+  }, true);
   mod.addEventListener("click", (e) => {
     const t = e.target.closest("button");
     if (!t || !modDraft) return;
+    if (t.dataset.editSec) {
+      e.preventDefault();   // don't fold the section when Edit / Done is clicked
+      const k = t.dataset.editSec;
+      if (modEditing.has(k)) modEditing.delete(k); else { modEditing.add(k); modOpen.add(k); }
+      renderModEditor();
+      if (modEditing.has(k)) document.querySelector(`#modEditor [data-sec="${k}"] .ms-body input, #modEditor [data-sec="${k}"] .ms-body textarea, #modEditor [data-sec="${k}"] .ms-body select`)?.focus();
+      return;
+    }
     if (t.dataset.add) { modDraft.data[t.dataset.add].push(LIST_ROWS[t.dataset.add]()); modDirty = true; renderModEditor(); }
     else if (t.dataset.delRow) { const [list, i] = t.dataset.delRow.split(":"); modDraft.data[list].splice(+i, 1); modDirty = true; renderModEditor(); }
     else if (t.id === "pullPosBtn") pullMod();
     else if (t.id === "saveReportBtn") saveReport();
     else if (t.id === "deleteReportBtn") deleteReport();
-    else if (t.id === "printReportBtn") window.print();
+    else if (t.id === "printReportBtn") printReport();
   });
 
   // Warn before closing the tab with unsaved recipe or report edits.
