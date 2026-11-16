@@ -1415,14 +1415,27 @@ async function scanInvoice(file) {
   finally { $("invoiceBtn").classList.remove("disabled"); $("invoiceBlade").classList.add("hidden"); $("invoiceFile").value = ""; }
 }
 
+// How a matched line's price compares with what the ingredient costs now:
+// a red ▲ when it went up, a green ▼ when it went down, with the old price.
+function invoicePriceChange(old, cost) {
+  const now = Number(cost);
+  if (old === null || !Number.isFinite(now) || Math.abs(old - now) <= 0.004) return old === null ? "" : `<span class="inv-same">Same price</span>`;
+  const pct = old > 0 ? ((now - old) / old) * 100 : 100, up = now > old;
+  return `<span class="inv-chg ${up ? "up" : "down"}" title="${up ? "Price went up" : "Price went down"}">${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%</span><span class="inv-was">was ${fmt(old)}</span>`;
+}
+const invoiceKnown = (n) => [...ingredients.values()].find((i) => i.name.toLowerCase() === String(n).trim().toLowerCase());
+
 function renderInvoice() {
   const el = $("invoiceResult");
   if (!invoiceDraft) { el.innerHTML = ""; return; }
   const v = invoiceDraft;
   const used = v.rows.filter((x) => x.use);
-  const known = (n) => [...ingredients.values()].find((i) => i.name.toLowerCase() === String(n).trim().toLowerCase());
+  const known = invoiceKnown;
+  const moves = v.rows.map((x) => { const k = known(x.name); return k ? Number(x.cost) - k.cost : 0; });
+  const ups = moves.filter((d) => d > 0.004).length, downs = moves.filter((d) => d < -0.004).length;
+  const tally = ups || downs ? ` <span class="inv-tally">${ups ? `<span class="inv-chg up">▲ ${ups} up</span>` : ""}${downs ? `<span class="inv-chg down">▼ ${downs} down</span>` : ""}</span>` : "";
   el.innerHTML = `
-    <div class="inv-head"><strong>${esc(v.supplier || "Invoice")}</strong> | ${fmtDay(v.date)} | ${v.rows.length} line${v.rows.length === 1 ? "" : "s"} read. Check them, change anything, then add.</div>
+    <div class="inv-head"><strong>${esc(v.supplier || "Invoice")}</strong> | ${fmtDay(v.date)} | ${v.rows.length} line${v.rows.length === 1 ? "" : "s"} read.${tally} Check them, change anything, then add.</div>
     <datalist id="ingNames">${[...ingredients.values()].map((i) => `<option value="${esc(i.name)}">`).join("")}</datalist>
     <div class="scroll-x"><table class="edit inv-table">
       <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
@@ -1430,7 +1443,7 @@ function renderInvoice() {
         return `<tr class="${x.use ? "" : "skip"} ${x.low ? "low" : ""}">
         <td><input type="checkbox" data-inv="${i}" data-k="use" ${x.use ? "checked" : ""} aria-label="Include this line"></td>
         <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient"></td>
-        <td class="inv-tag">${k ? `<span class="tag-upd">Updates yours</span>${old !== null && Math.abs(old - x.cost) > 0.004 ? `<span class="inv-was">was ${fmt(old)}</span>` : ""}` : `<span class="tag-new">New</span>`}${x.low ? `<span class="inv-low">Check this line</span>` : ""}</td>
+        <td class="inv-tag">${k ? `<span class="tag-upd">Updates yours</span><span data-chg="${i}">${invoicePriceChange(old, x.cost)}</span>` : `<span class="tag-new">New</span>`}${x.low ? `<span class="inv-low">Check this line</span>` : ""}</td>
         <td style="width:90px"><input data-inv="${i}" data-k="unit" value="${esc(x.unit)}" list="unitList" maxlength="20" aria-label="Unit"></td>
         <td class="num" style="width:110px"><input class="num mono" type="number" min="0" step="0.5" data-inv="${i}" data-k="qty" value="${trimNum(x.qty)}" aria-label="Received"></td>
         <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
@@ -3468,6 +3481,10 @@ function wireControls() {
   $("invoiceResult").addEventListener("input", (e) => {
     const t = e.target; if (t.dataset.inv === undefined || !invoiceDraft) return;
     invoiceDraft.rows[+t.dataset.inv][t.dataset.k] = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.k === "cost") {                                   // keep the arrow in step while typing a price
+      const row = invoiceDraft.rows[+t.dataset.inv], k = invoiceKnown(row.name), chg = $("invoiceResult").querySelector(`[data-chg="${t.dataset.inv}"]`);
+      if (chg && k) chg.innerHTML = invoicePriceChange(k.cost, row.cost);
+    }
     if (t.type === "checkbox" || t.dataset.k === "name") { const at = t.selectionStart; renderInvoice(); const again = document.querySelector(`#invoiceResult [data-inv="${t.dataset.inv}"][data-k="${t.dataset.k}"]`); if (again && t.type !== "checkbox") { again.focus(); try { again.setSelectionRange(at, at); } catch { /* ok */ } } }
   });
   $("invoiceResult").addEventListener("click", (e) => {
