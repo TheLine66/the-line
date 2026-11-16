@@ -54,6 +54,7 @@ module.exports = async function handler(req, res) {
   }
   if (size > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
   if (body.action === "image") return makeImage(body, key, res);
+  if (body.action === "vibe") return readVibe(body, key, res);
   if (!Array.isArray(body.pantry) || !body.pantry.length) return res.status(400).json({ error: "Add some ingredients first." });
   const mode = ["party", "event", "free"].includes(body.mode) ? body.mode : "weekly";
 
@@ -235,6 +236,86 @@ Also give the supplier's name and the invoice date (YYYY-MM-DD) if they're print
   }
 }
 
+// ---------------------------------------------------------------- vibe
+// The owner describes a vibe ("cozy rainy pub night", "loud game day") and
+// Gemini picks the printed menu's layout, lettering, colors and border to
+// match. The dishes are not touched.
+const LAYOUT_GUIDE = `- classic: simple and centered, fits anything
+- chalk: a dark chalkboard in a wood frame, hand-lettered, prices circled (pub nights, cozy, casual, happy hour). Needs a DARK background and light text.
+- diner: retro diner, script name, dotted lines to the prices (brunch, family nights, fun and retro)
+- news: a newspaper front page; the first dish is the headline story (chef's features, fresh catch, dishes with a story)
+- poster: a loud poster with a huge title and every dish in its own bold block (game days, watch parties, big events)
+- bistro: quiet and elegant, lots of white space, centered italics (date night, wine dinners, holidays, anything fancy)`;
+const FONT_GUIDE = `- pub: chunky slab headings (pubs, hearty, classic bar)
+- chalk: hand-lettered chalk marker (chalkboards, casual, cozy)
+- sports: tall condensed block letters (sports, loud, bold)
+- diner: retro script (diners, brunch, playful retro)
+- bistro: elegant thin serif (fine dining, romantic)
+- news: newspaper headline serif (stories, features, old-fashioned)
+- type: typewriter (vintage, rustic, handmade)
+- kids: soft rounded letters (kids, birthdays, friendly)
+- classic: plain serif (when nothing else fits)`;
+const LAYOUTS = ["classic", "chalk", "diner", "news", "poster", "bistro"];
+const FONTS = ["classic", "pub", "chalk", "sports", "diner", "bistro", "news", "type", "kids"];
+const PATTERNS = ["none", "stripes", "dots", "confetti", "zigzag", "waves", "checkerboard"];
+const VIBE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    layout: { type: "STRING", enum: LAYOUTS },
+    font: { type: "STRING", enum: FONTS },
+    background: { type: "STRING", description: "Hex color for the menu background" },
+    text: { type: "STRING", description: "Hex color for the main text, easy to read on the background" },
+    accent: { type: "STRING", description: "Hex color for the title and prices" },
+    accent2: { type: "STRING", description: "A second hex color for small details" },
+    pattern: { type: "STRING", enum: PATTERNS },
+    summary: { type: "STRING", description: "One short, plain sentence describing the look you chose" },
+  },
+  required: ["layout", "font", "background", "text", "accent", "pattern", "summary"],
+};
+
+async function readVibe(b, key, res) {
+  const vibe = clip(b.vibe, 200);
+  if (!vibe) return res.status(400).json({ error: "Describe the vibe first, like \"cozy rainy pub night\"." });
+  const m = b.menu || {};
+  const dishes = (Array.isArray(m.items) ? m.items : []).slice(0, 12).map((x) => clip(x, 80)).filter(Boolean);
+  const owner = (Array.isArray(b.colors) ? b.colors : []).filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(0, 6);
+  const prompt = `A restaurant owner wants their printed specials menu to have this vibe: "${vibe}".
+The menu is called "${clip(m.title, 80)}"${clip(m.kicker, 120) ? ` (${clip(m.kicker, 120)})` : ""}. Dishes: ${dishes.join("; ") || "(not given)"}.
+${clip(b.current, 60) ? `It currently uses the "${clip(b.current, 60)}" layout. Pick a different one unless that one is clearly the best fit for this vibe.` : ""}
+
+Pick the design that best fits the vibe.
+"layout", one of:
+${LAYOUT_GUIDE}
+"font", one of:
+${FONT_GUIDE}
+Colors are 6-digit hex codes. ${owner.length ? `The owner's colors are ${owner.join(", ")}: use ONLY those, plus white or near-black for readable text.` : "Pick colors that fit the vibe; the background and text must be easy to read together."}
+"pattern" is the border strip at the top and bottom: none, stripes, dots, confetti, zigzag, waves or checkerboard. Use "none" unless one clearly fits.
+"summary": one short sentence a restaurant owner would understand, like "A cozy chalkboard in deep green with hand-lettered names." No emoji.`;
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: VIBE_SCHEMA },
+  };
+  try {
+    const model = await pickModel(key);
+    const r = await callGemini(model, payload, key);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.error?.message || "");
+      if (r.status === 429) return res.status(429).json({ error: "Gemini is busy or out of quota. Try again in a minute." });
+      if (r.status === 403 || /api key/i.test(msg)) return res.status(502).json({ error: "Gemini didn't accept the API key. Check GEMINI_API_KEY in Vercel's settings." });
+      return res.status(502).json({ error: msg || `Gemini returned an error (${r.status}).` });
+    }
+    if (data?.promptFeedback?.blockReason) return res.status(422).json({ error: "Gemini wouldn't answer that. Try describing the vibe differently." });
+    const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    let look;
+    try { look = JSON.parse(text); } catch { return res.status(502).json({ error: "Gemini's answer came back garbled. Try again." }); }
+    if (!look || !LAYOUTS.includes(look.layout)) return res.status(502).json({ error: "Gemini didn't pick a look. Try again." });
+    return res.status(200).json({ model, look });
+  } catch {
+    return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
+  }
+}
+
 function callGemini(model, payload, key) {
   return fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
@@ -285,6 +366,11 @@ Make it personal:
 The look (always fill in "theme", "tagline" and "pattern"):
 - If the owner gives exact colors (hex codes), use ONLY those colors, plus white or near-black if you need them for readable text. Decide which one is the background and which are the title and details.
 - Otherwise pick colors that fit the occasion: a team's real colors, a party's theme, or the season. Colors are 6-digit hex codes like #FF8200. The background and text must be easy to read together.
+- "theme.layout" and "theme.font" set the printed menu's design. Pick what fits THIS occasion, and vary them; don't default to classic.
+Layouts:
+${LAYOUT_GUIDE}
+Fonts:
+${FONT_GUIDE}
 - "pattern" is the border strip along the top and bottom. Choose what fits THIS occasion, and choose "none" when nothing fits: "none" suits most weekly specials and anything elegant. stripes = sporty or classic diner, dots = kids and playful parties, confetti = birthdays and celebrations, zigzag = retro, loud or fun, waves = summer, beach or seafood, checkerboard ONLY for something truly checkered (racing, a stadium with checkerboard end zones, a retro diner floor).`;
 
 function buildRequest(mode, b) {
@@ -439,6 +525,8 @@ const SCHEMA = {
         accent: { type: "STRING", description: "Hex color for the title and lines" },
         accent2: { type: "STRING", description: "A second hex color for small details" },
         style: { type: "STRING", description: "Lettering style: one of bold, classic, playful, elegant" },
+        layout: { type: "STRING", enum: ["classic", "chalk", "diner", "news", "poster", "bistro"], description: "The printed menu's layout" },
+        font: { type: "STRING", enum: ["classic", "pub", "chalk", "sports", "diner", "bistro", "news", "type", "kids"], description: "The printed menu's font pairing" },
       },
       required: ["background", "text", "accent", "style"],
     },

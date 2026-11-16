@@ -2777,6 +2777,43 @@ async function makePicture() {
   } finally { if ($("makePictureBtn")) $("makePictureBtn").disabled = false; if ($("pictureBlade")) $("pictureBlade").classList.add("hidden"); }
 }
 
+// Describe a vibe: Gemini picks the layout, lettering, colors and border; the
+// dishes stay the same. The owner's exact colors (if any) still win.
+async function applyVibe() {
+  if (!lastMenu) return;
+  const input = $("vibeInput"), vibe = input.value.trim();
+  if (!vibe) { toast("Describe the vibe first, like \"cozy rainy pub night\".", "err"); input.focus(); return; }
+  if (voice) voice.rec.stop();
+  const btn = $("vibeBtn"), note = $("vibeNote");
+  btn.disabled = true; note.textContent = "Gemini is restyling the menu…"; $("vibeBlade").classList.remove("hidden");
+  lastMenu.vibe = vibe;
+  try {
+    const { data } = await sb.auth.getSession();
+    const { menu, request } = lastMenu;
+    const r = await fetch("/api/specials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+      body: JSON.stringify({ action: "vibe", vibe, colors: request.colors_hex || [],
+        current: lastMenu.look?.layout || menu.theme?.layout || "classic",
+        menu: { title: menu.title, kicker: menu.tagline || "", items: menu.items.map((it) => String(it.name || "")) } }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.look) { note.textContent = ""; toast(out.error || "Couldn't change the look. Try again.", "err"); return; }
+    if (lastMenu.menu !== menu) return;            // a new menu came in meanwhile
+    const v = out.look, th = menuTheme({ background: v.background, text: v.text, accent: v.accent, accent2: v.accent2, style: "classic" }, request.colors_hex || []);
+    lastMenu.look = { ...(lastMenu.look || {}), layout: v.layout, font: MENU_PAIRS[v.font] ? v.font : LAYOUT_FONT[v.layout],
+      bg: th.bg, ink: th.ink, accent: th.accent, accent2: th.accent2, pattern: PATTERNS.includes(v.pattern) ? v.pattern : "none" };
+    lastMenu.vibeSummary = v.summary || "";
+    lastMenu.restyled = true; renderMenuResult(); lastMenu.restyled = false;
+  } catch {
+    note.textContent = "";
+    toast("Couldn't reach the menu assistant. Check your internet and try again.", "err");
+  } finally {
+    if ($("vibeBtn")) $("vibeBtn").disabled = false;
+    if ($("vibeBlade")) $("vibeBlade").classList.add("hidden");
+  }
+}
+
 // Match the ingredient names Gemini used to the real ingredient list.
 function findIngredient(name) {
   const n = String(name || "").trim().toLowerCase();
@@ -2812,6 +2849,23 @@ const MENU_FONTS = {
   playful: "'Trebuchet MS', 'Segoe UI', Verdana, sans-serif",
   elegant: "Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif",
 };
+// Printed-menu layouts (CSS in design.css, "lay-…") and font pairings (Google
+// Fonts, loaded in index.html). Gemini picks both; the owner can change either,
+// or describe a vibe and let Gemini restyle the menu.
+const MENU_LAYOUTS = { classic: "Classic", chalk: "Chalkboard", diner: "Diner", news: "Broadsheet", poster: "Game-day poster", bistro: "Bistro card" };
+const LAYOUT_FONT = { classic: "classic", chalk: "chalk", diner: "diner", news: "news", poster: "sports", bistro: "bistro" };
+const MENU_PAIRS = {
+  classic: { label: "Gemini's lettering" },
+  pub:    { label: "Pub slab",       d: "'Alfa Slab One', Rockwell, serif",             b: "'Source Serif 4', Georgia, serif" },
+  chalk:  { label: "Chalk hand",     d: "'Permanent Marker', 'Comic Sans MS', cursive", b: "Kalam, 'Comic Sans MS', cursive" },
+  sports: { label: "Game day",       d: "'Bebas Neue', Impact, sans-serif",             b: "Barlow, 'Arial Narrow', sans-serif" },
+  diner:  { label: "Retro diner",    d: "Lobster, 'Brush Script MT', cursive",          b: "Oswald, 'Arial Narrow', sans-serif" },
+  bistro: { label: "Bistro",         d: "'Cormorant Garamond', Garamond, serif",        b: "'Cormorant Garamond', Garamond, serif" },
+  news:   { label: "Newspaper",      d: "'Abril Fatface', 'Bodoni MT', serif",          b: "'Libre Baskerville', Baskerville, serif" },
+  type:   { label: "Typewriter",     d: "'Special Elite', 'Courier New', monospace",    b: "'Courier Prime', 'Courier New', monospace" },
+  kids:   { label: "Friendly round", d: "Fredoka, 'Trebuchet MS', sans-serif",          b: "Nunito, 'Trebuchet MS', sans-serif" },
+};
+
 // The owner's colors are the only ones allowed (plus white and near-black
 // for readable text): each color Gemini picked snaps to the closest one.
 function rgb(hex) { return [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16)); }
@@ -2898,18 +2952,25 @@ function renderMenuResult() {
   // Colors and border: Gemini's pick, then anything the owner changed below the menu.
   const look = lastMenu.look || {};
   let th = menuTheme(menu.theme, request.colors_hex || []);
-  if (look.bg || look.ink || look.accent) th = { ...th, bg: look.bg || th.bg, ink: look.ink || th.ink, accent: look.accent || th.accent, accent2: look.accent || th.accent2 };
+  if (look.bg || look.ink || look.accent) th = { ...th, bg: look.bg || th.bg, ink: look.ink || th.ink, accent: look.accent || th.accent, accent2: look.accent2 || look.accent || th.accent2 };
+  // Layout and lettering: the owner's pick or the vibe's, else Gemini's, else the layout's own font.
+  const layout = MENU_LAYOUTS[look.layout] ? look.layout : MENU_LAYOUTS[menu.theme?.layout] ? menu.theme.layout : "classic";
+  const fontKey = MENU_PAIRS[look.font] ? look.font : MENU_PAIRS[menu.theme?.font] && !look.layout ? menu.theme.font : LAYOUT_FONT[layout];
+  const pair = MENU_PAIRS[fontKey];
+  const fontD = pair.d || MENU_FONTS[th.style], fontB = pair.b || MENU_FONTS[th.style];
+  const dateline = layout === "news" ? `<div class="mp-dateline"><span>${esc(rest.name)}</span><span>${new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</span><span>Specials edition</span></div>` : "";
   const kicker = mode === "event" ? request.event.name : party ? (request.party.type || "Party menu") : mode === "free" ? "" : "This week's specials";
   const motifs = (Array.isArray(menu.motifs) ? menu.motifs : []).map((m) => String(m).trim().toLowerCase()).filter((m) => MOTIFS[m]).slice(0, 4);
   const pattern = look.pattern || (PATTERNS.includes(String(menu.pattern || "").toLowerCase()) ? String(menu.pattern).toLowerCase() : "none");
   const sayings = (Array.isArray(menu.sayings) ? menu.sayings : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   const band = (n) => (pattern === "none" ? "" : `<div class="mp-band pat-${pattern}" aria-hidden="true">${bandSvg(pattern, th, n)}</div>`);
-  const poster = `<div class="menu-poster mp-${th.style}${pattern === "none" ? "" : " has-band"}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${MENU_FONTS[th.style]}">
+  const poster = `<div class="menu-poster mp-${th.style} lay-${layout}${pattern === "none" ? "" : " has-band"}${lastMenu.restyled ? " restyled" : ""}" style="--mp-bg:${th.bg};--mp-ink:${th.ink};--mp-accent:${th.accent};--mp-accent2:${th.accent2};--mp-font:${fontD};--mp-body:${fontB}">
       ${band(1)}
       ${lastMenu.picture ? `<img class="mp-picture" src="${lastMenu.picture}" alt="">` : ""}
       ${motifs.length ? `<div class="mp-motifs">${motifs.map((m, i) => motifSvg(m, i % 2 ? "var(--mp-accent2)" : "var(--mp-accent)")).join("")}</div>` : ""}
       <div class="mp-kicker">${esc(rest.name)}${kicker ? ` | ${esc(kicker)}` : ""}</div>
       <h3 class="mp-title">${esc(menu.title)}</h3>
+      ${dateline}
       ${menu.tagline ? `<p class="mp-tag">${esc(menu.tagline)}</p>` : ""}
       <div class="mp-items">${menu.items.map((it) => `<div class="mp-item">
         <div class="mp-line">${party && it.course ? `<span class="mp-course">${esc(it.course)}</span>` : ""}<span class="mp-name">${esc(it.name)}</span><span class="mp-dots"></span>${Number(it.price) > 0 ? `<span class="mp-price">${fmt(Number(it.price))}</span>` : ""}</div>
@@ -2948,12 +3009,23 @@ function renderMenuResult() {
     <div class="chart-head"><h3>Your Menu</h3><span class="note">Suggested by ${esc(model)}. Check it over before you print it.</span></div>
     ${sourcesLine(lastMenu.sources)}
     ${poster}
+    <div class="menu-vibe">
+      <label for="vibeInput">Describe the vibe</label>
+      <div class="vibe-row">
+        <span class="voice-field"><input id="vibeInput" maxlength="200" placeholder="e.g. cozy rainy pub night, loud game day, fancy date night" value="${esc(lastMenu.vibe || "")}">${micBtn()}</span>
+        <button class="applybtn" id="vibeBtn" type="button">Change the look</button>
+      </div>
+      <span class="note" id="vibeNote">${lastMenu.vibeSummary ? esc(lastMenu.vibeSummary) : "Type or say a vibe and Gemini restyles the menu: layout, lettering, colors and border. The dishes stay the same."}</span>
+      <div class="blade-track menu-wait hidden" id="vibeBlade" aria-hidden="true"></div>
+    </div>
     <div class="menu-look" role="group" aria-label="Change the menu's look">
+      <label>Layout<select data-look="layout">${Object.entries(MENU_LAYOUTS).map(([k, v]) => `<option value="${k}" ${k === layout ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label>Font<select data-look="font">${Object.entries(MENU_PAIRS).map(([k, v]) => `<option value="${k}" ${k === fontKey ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
       <label>Background<input type="color" data-look="bg" value="${th.bg}"></label>
       <label>Text<input type="color" data-look="ink" value="${th.ink}"></label>
       <label>Title and prices<input type="color" data-look="accent" value="${th.accent}"></label>
       <label>Border<select data-look="pattern">${Object.entries(PATTERN_NAMES).map(([k, v]) => `<option value="${k}" ${k === pattern ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      ${look.bg || look.ink || look.accent || look.pattern ? `<button class="linkbtn" id="resetLook" type="button">Back to Gemini's look</button>` : ""}
+      ${look.bg || look.ink || look.accent || look.pattern || look.layout || look.font ? `<button class="linkbtn" id="resetLook" type="button">Back to Gemini's look</button>` : ""}
       ${contrast(th.bg, th.ink) < 4.5 ? `<span class="look-warn">The text is hard to read on this background.</span>` : ""}
     </div>
     <div class="row-actions">
@@ -3559,6 +3631,10 @@ function wireControls() {
   });
   $("menuResult").addEventListener("change", (e) => {
     if (e.target.dataset.look === "pattern" && lastMenu) { lastMenu.look = { ...(lastMenu.look || {}), pattern: e.target.value }; renderMenuResult(); return; }
+    if ((e.target.dataset.look === "layout" || e.target.dataset.look === "font") && lastMenu) {
+      lastMenu.look = { ...(lastMenu.look || {}), [e.target.dataset.look]: e.target.value };
+      lastMenu.restyled = true; renderMenuResult(); lastMenu.restyled = false; return;
+    }
     if (e.target.id === "pictureStyle" && lastMenu) { lastMenu.pictureStyle = e.target.value; return; }
     if (e.target.id !== "menuPicture" || !e.target.files[0] || !lastMenu) return;
     const file = e.target.files[0];
@@ -3570,7 +3646,13 @@ function wireControls() {
   });
   $("menuResult").addEventListener("click", (e) => {
     if (e.target.closest("#removePicture")) { if (lastMenu) { delete lastMenu.picture; renderMenuResult(); } return; }
-    if (e.target.closest("#resetLook")) { if (lastMenu) { delete lastMenu.look; renderMenuResult(); } return; }
+    if (e.target.closest("#resetLook")) { if (lastMenu) { delete lastMenu.look; delete lastMenu.vibeSummary; renderMenuResult(); } return; }
+    if (e.target.closest("#vibeBtn")) { applyVibe(); return; }
+  });
+  $("menuResult").addEventListener("keydown", (e) => {
+    if (e.target.id === "vibeInput" && e.key === "Enter") { e.preventDefault(); applyVibe(); }
+  });
+  $("menuResult").addEventListener("click", (e) => {
     if (e.target.closest("#makePictureBtn")) { makePicture(); return; }
     if (e.target.closest("#remakeMenuBtn")) makeMenu(true);
     else if (e.target.closest("#printMenuBtn")) window.print();
