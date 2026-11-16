@@ -1406,9 +1406,12 @@ async function scanInvoice(file) {
     invoiceDraft = { supplier: inv.supplier || "", date: base, rows: inv.items.map((x) => {
       const match = findIngredient(x.existing || "") && x.existing ? findIngredient(x.existing) : [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
       const days = Number(x.shelf_life_days);
+      const qty = Number(x.quantity) || 0, total = Number(x.line_total) || 0;
       return { use: true, name: match ? match.name : String(x.name || "").trim(), unit: match ? match.unit : String(x.unit || "each"),
-        qty: Number(x.quantity) || 0, cost: Math.round((Number(x.unit_cost) || 0) * 10000) / 10000,
-        useBy: Number.isFinite(days) && days > 0 ? addDays(base, Math.round(days)) : "", low: x.confidence === "low" };
+        qty, total: total || Math.round((Number(x.unit_cost) || 0) * qty * 100) / 100,
+        cost: qty && total ? Math.round((total / qty) * 10000) / 10000 : Math.round((Number(x.unit_cost) || 0) * 10000) / 10000,
+        math: x.math || "", pack: x.pack || "",
+        useBy: Number.isFinite(days) && days > 0 ? addDays(base, Math.round(days)) : "", low: x.confidence === "low" || x.checked === false };
     }) };
     note.textContent = "";
     renderInvoice();
@@ -1439,15 +1442,16 @@ function renderInvoice() {
     <div class="inv-head"><strong>${esc(v.supplier || "Invoice")}</strong> | ${fmtDay(v.date)} | ${v.rows.length} line${v.rows.length === 1 ? "" : "s"} read.${tally} Check them, change anything, then add.</div>
     <datalist id="ingNames">${[...ingredients.values()].map((i) => `<option value="${esc(i.name)}">`).join("")}</datalist>
     <div class="scroll-x"><table class="edit inv-table">
-      <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
+      <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Line total ($)</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
       <tbody>${v.rows.map((x, i) => { const k = known(x.name), old = k ? k.cost : null;
         return `<tr class="${x.use ? "" : "skip"} ${x.low ? "low" : ""}">
         <td><input type="checkbox" data-inv="${i}" data-k="use" ${x.use ? "checked" : ""} aria-label="Include this line"></td>
-        <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient"></td>
+        <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient">${x.math ? `<div class="inv-math">${esc(x.pack ? `${x.pack}: ` : "")}${esc(x.math)}</div>` : ""}</td>
         <td class="inv-tag">${k ? `<span class="tag-upd">Updates yours</span><span data-chg="${i}">${invoicePriceChange(old, x.cost)}</span>` : `<span class="tag-new">New</span>`}${x.low ? `<span class="inv-low">Check this line</span>` : ""}</td>
         <td style="width:90px"><input data-inv="${i}" data-k="unit" value="${esc(x.unit)}" list="unitList" maxlength="20" aria-label="Unit"></td>
         <td class="num" style="width:110px"><input class="num mono" type="number" min="0" step="0.5" data-inv="${i}" data-k="qty" value="${trimNum(x.qty)}" aria-label="Received"></td>
-        <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
+        <td class="num" style="width:120px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="total" value="${trimNum(x.total)}" aria-label="Line total"></td>
+        <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.0001" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
         ${stockReady ? `<td style="width:170px"><input type="date" data-inv="${i}" data-k="useBy" value="${esc(x.useBy)}" aria-label="Use by"></td>` : ""}
       </tr>`; }).join("")}</tbody>
     </table></div>
@@ -3570,8 +3574,15 @@ function wireControls() {
   $("invoiceFile").addEventListener("change", (e) => scanInvoice(e.target.files[0]));
   $("invoiceResult").addEventListener("input", (e) => {
     const t = e.target; if (t.dataset.inv === undefined || !invoiceDraft) return;
-    invoiceDraft.rows[+t.dataset.inv][t.dataset.k] = t.type === "checkbox" ? t.checked : t.value;
-    if (t.dataset.k === "cost") {                                   // keep the arrow in step while typing a price
+    const row = invoiceDraft.rows[+t.dataset.inv], k = t.dataset.k;
+    row[k] = t.type === "checkbox" ? t.checked : t.value;
+    // Cost per unit = line total / amount received. Change the amount or the total and the cost follows;
+    // change the cost and the total follows.
+    const q = Number(row.qty), tot = Number(row.total), c = Number(row.cost);
+    const put = (key, v) => { row[key] = v; const box = document.querySelector(`#invoiceResult [data-inv="${t.dataset.inv}"][data-k="${key}"]`); if (box) box.value = trimNum(v); };
+    if ((k === "qty" || k === "total") && q > 0 && tot >= 0) put("cost", Math.round((tot / q) * 10000) / 10000);
+    else if (k === "cost" && q > 0 && c >= 0) put("total", Math.round(c * q * 100) / 100);
+    if (["cost", "qty", "total"].includes(t.dataset.k)) {           // keep the arrow in step with the cost per unit
       const row = invoiceDraft.rows[+t.dataset.inv], k = invoiceKnown(row.name), chg = $("invoiceResult").querySelector(`[data-chg="${t.dataset.inv}"]`);
       if (chg && k) chg.innerHTML = invoicePriceChange(k.cost, row.cost);
     }

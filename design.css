@@ -763,3 +763,4 @@ table.sched tfoot td { border-bottom: none; border-top: 2px solid var(--ink); fo
 .ov-more { text-align: center; margin: 22px 0 0; font-size: 15px; }
 @media (max-width: 900px) { .ov-cards { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 480px) { .ov-cards { grid-template-columns: 1fr; } .ov-wrap { padding: 20px 14px 32px; } }
+.inv-math { font-size: 12px; margin-top: 4px; white-space: nowrap; }
