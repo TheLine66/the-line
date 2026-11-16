@@ -2674,6 +2674,15 @@ function parseColors(text) {
   return [...new Set(found.sort((a, b) => a.at - b.at).map((f) => f.hex))].slice(0, 6);
 }
 
+// When the menu server's reply has no message of its own (Vercel cut it off,
+// or it crashed), say what kind of problem it was instead of a blank "error".
+function serverTrouble(status) {
+  if (status === 504) return "Gemini took too long to answer. Try again, or ask for fewer items.";
+  if (status === 413) return "That's too much to send in one go. Try fewer items or shorter notes.";
+  if (status >= 500) return `The menu server had a problem (error ${status}). Try again in a minute.`;
+  return `Something went wrong (error ${status}). Try again.`;
+}
+
 // "Show me 3 ideas first": three different directions to pick from.
 let lastIdeas = null;
 async function showIdeas() {
@@ -2689,7 +2698,7 @@ async function showIdeas() {
     const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` }, body: JSON.stringify(request) });
     const out = await r.json().catch(() => ({}));
     note.textContent = "";
-    if (!r.ok) { toast(out.error || "Something went wrong. Try again.", "err"); return; }
+    if (!r.ok) { toast(out.error || serverTrouble(r.status), "err"); return; }
     lastIdeas = out;
     const el = $("ideasResult");
     el.classList.remove("hidden");
@@ -2733,7 +2742,7 @@ async function makeMenu(again = false, idea = null) {
       $("menuResult").innerHTML = `<h3>The menu assistant isn't connected yet</h3><p>Whoever set up The Line needs to add the Gemini key in Vercel. The steps are in the README under "Specials (Google Gemini)".</p>`;
       return;
     }
-    if (!r.ok) { note.textContent = ""; toast(out.error || "Something went wrong. Try again.", "err"); return; }
+    if (!r.ok) { note.textContent = ""; toast(out.error || serverTrouble(r.status), "err"); return; }
     // "Try another version" keeps the picture and any colors or border you picked.
     lastMenu = { ...out, request, picture: again ? lastMenu?.picture : undefined, look: again ? lastMenu?.look : undefined };
     recentDishes = [...out.menu.items.map((it) => String(it.name || "")).filter(Boolean), ...recentDishes].slice(0, 24);

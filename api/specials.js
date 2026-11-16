@@ -27,6 +27,7 @@ const MAX_INVOICE = 4200000;     // an invoice photo, already shrunk in the brow
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST." });
+  const started = Date.now();   // Vercel stops this function at 60 s; answer clearly before that
 
   const key = process.env.GEMINI_API_KEY;
   const sbUrl = String(process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
@@ -73,7 +74,7 @@ module.exports = async function handler(req, res) {
       // Gemini 3 works best at its default temperature (1.0); the "avoid" list keeps versions different.
       generationConfig: { responseMimeType: "application/json", responseSchema: ideas ? IDEAS_SCHEMA : SCHEMA },
     };
-    let r = await callGemini(model, payload, key);
+    let r = await callGemini(model, payload, key, Math.max(10000, 55000 - (Date.now() - started)));
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = String(data?.error?.message || "");
@@ -91,7 +92,8 @@ module.exports = async function handler(req, res) {
     }
     if (!menu || !Array.isArray(menu.items) || !menu.items.length) return res.status(502).json({ error: "Gemini didn't suggest any dishes. Try again." });
     return res.status(200).json({ mode, model, menu, sources: research.sources });
-  } catch {
+  } catch (e) {
+    if (e?.name === "AbortError") return res.status(504).json({ error: "Gemini took too long to write this menu. Try again, or ask for fewer items." });
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
   }
 };
@@ -176,7 +178,8 @@ Look up and list the facts that would make it accurate and personal. Short bulle
 - A birthday, holiday or theme: what kids or guests that age love about it, real details of the theme (for golf: carts, tees, flags, holes-in-one), and the usual colors.
 - Anything else mentioned that you can check (a band, a movie, a place, a decade).`;
   try {
-    const r = await callGemini(model, { contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }, key);
+    // At most 15 seconds: a slow search is skipped, not allowed to use up the time the menu needs.
+    const r = await callGemini(model, { contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }, key, 15000);
     if (!r.ok) return { facts: "", sources: [] };
     const data = await r.json();
     const cand = data?.candidates?.[0];
@@ -316,12 +319,21 @@ Colors are 6-digit hex codes. ${owner.length ? `The owner's colors are ${owner.j
   }
 }
 
-function callGemini(model, payload, key) {
-  return fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify(payload),
-  });
+// Gives up after "ms" (an AbortError), so the function always answers before
+// Vercel's 60-second limit instead of being cut off with no message.
+async function callGemini(model, payload, key, ms = 50000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    const body = await r.text();          // read it inside the time limit too
+    return new Response(body, { status: r.status, headers: { "Content-Type": "application/json" } });
+  } finally { clearTimeout(timer); }
 }
 
 // Lists the models this key can use and picks the newest one whose name matches.
