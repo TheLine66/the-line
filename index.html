@@ -111,6 +111,10 @@
           <div class="sub">Slowing Down the Rush</div>
         </div>
       </div>
+      <div class="mode-switch" role="group" aria-label="How much detail">
+        <button type="button" data-viewmode="overview" aria-pressed="false">Overview</button>
+        <button type="button" data-viewmode="details" aria-pressed="true">Details</button>
+      </div>
       <div class="where">
         <div class="where-rest" id="whereRest"></div>
         <div class="where-page" id="wherePage">Cost Tracker</div>
@@ -191,6 +195,7 @@
 
   <!-- Cost Tracker -->
   <!-- Tonight: opens when no tabs are pinned, or from the logo. Built by renderHome() in app.js. -->
+  <div class="page" id="page-overview"></div>
   <div class="page" id="page-home"><div class="tonight" id="tonight"></div></div>
 
   <div class="page active" id="page-cost">

@@ -527,9 +527,18 @@ function renderTabs() {
 function render() {
   if (!rest) return;
   if (!(activePage in PAGE_NAMES)) activePage = "cost";   // e.g. a page that's been put away
+  const overview = viewMode === "overview";
+  document.body.classList.toggle("mode-overview", overview);
+  document.querySelectorAll("[data-viewmode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.viewmode === viewMode)));
   $("whereRest").textContent = rest.name;
-  $("wherePage").textContent = PAGE_NAMES[activePage];
+  $("wherePage").textContent = overview ? "Overview" : PAGE_NAMES[activePage];
   renderTabs();
+  if (overview) {
+    document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-overview"));
+    $("simbar").classList.add("hidden");
+    renderOverview();
+    return;
+  }
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.page === activePage));
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + activePage));
   $("simbar").classList.toggle("hidden", !(activePage === "cost" || activePage === "perf"));
@@ -855,6 +864,138 @@ function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
     <thead><tr><th>Dish</th><th class="num">Units/wk</th><th class="num">Price</th><th class="num">Food cost %</th>
       <th class="num">Margin/plate</th><th class="num">Weekly margin $</th><th class="num">% of total margin</th><th class="num">Type</th></tr></thead>
     <tbody>${body}</tbody>`;
+}
+
+// ---------------------------------------------------------- Overview mode
+// The high-level view for owners and executives: four big numbers in plain
+// words, up to three things that need someone today, and sales by day.
+// Every card links into Details mode (the full app) for the math.
+let viewMode = safeGet("line.mode") === "overview" ? "overview" : "details";
+function setViewMode(mode) {
+  viewMode = mode === "overview" ? "overview" : "details";
+  safeSet("line.mode", viewMode);
+  if (viewMode === "details" && activePage === "overview") activePage = "home";
+  window.scrollTo({ top: 0 });
+  render();
+}
+
+function renderOverview() {
+  const el = $("page-overview");
+  const t = targets();
+  const now = new Date();
+  const hello = now.getHours() < 12 ? "Good morning." : now.getHours() < 17 ? "Good afternoon." : "Good evening.";
+  const pill = (cls, text) => `<span class="ov-pill ${cls}">${esc(text)}</span>`;
+  const card = (k, goto, label, value, pillHtml, sub) => `
+    <button type="button" class="ov-card" data-goto="${goto}" aria-label="${esc(label)}: ${esc(String(value).replace(/<[^>]+>/g, ""))}. Open details.">
+      <span class="ov-k">${label}</span><span class="ov-v mono">${value}</span>${pillHtml || ""}<span class="ov-s">${sub || ""}</span>
+    </button>`;
+  const pct = (a, b) => (b ? ((a - b) / b) * 100 : null);
+  const upDown = (p, word = "") => (p === null ? "" : pill(p >= 0 ? "ok" : "bad", `${p >= 0 ? "Up" : "Down"} ${Math.abs(p).toFixed(0)}%${word}`));
+
+  // Dishes at real cost (what-ifs ignored, like Tonight)
+  const week = sortedWeeks()[0] || null;
+  const rows = dishes.map((d) => {
+    const cost = realCost(d), p = d.price ? (cost / d.price) * 100 : 0;
+    const units = week ? (salesByWeek.get(week)?.get(d.id) || 0) : 0;
+    return { d, cost, pct: p, st: statusOf(p), units, margin: (d.price - cost) * units };
+  });
+
+  // 1. Sales this week
+  const cards = [];
+  if (week) {
+    const weeks = sortedWeeks(), prev = weeks[1];
+    const rev = salesForWeek(week).revenue, before = prev ? salesForWeek(prev).revenue : 0;
+    cards.push(card("sales", "sales", "Sales this week", fmt0(rev), upDown(pct(rev, before)), before ? `vs. ${fmt0(before)} the week before` : weekPhrase(week)));
+  } else cards.push(card("sales", "sales", "Sales this week", "—", pill("watch", "Not entered yet"), "Add a week on Weekly Sales"));
+
+  // 2. Last shift (latest MOD report)
+  const last = extrasReady ? modReports[0] : null;
+  if (last) {
+    const s = reportStats(reportFrom(last).data);
+    const lw = modReports.find((x) => x.report_date === addDays(last.report_date, -7) && x.shift === last.shift);
+    const ls = lw ? reportStats(reportFrom(lw).data) : null;
+    const day = parseDay(last.report_date).toLocaleDateString(undefined, { weekday: "long" });
+    cards.push(card("shift", "mod", `Last shift (${esc(day)} ${esc(last.shift.toLowerCase())})`, s.sales ? fmt0(s.sales) : `${s.covers} guests`,
+      ls && s.sales && ls.sales ? upDown(pct(s.sales, ls.sales)) : "",
+      `${s.covers} guests${ls ? ` vs. ${ls.covers} the ${day} before` : ""}`));
+  } else cards.push(card("shift", "mod", "Last shift", "—", pill("watch", "No report yet"), "Managers fill this in on the MOD Report"));
+
+  // 3. Food cost
+  if (rows.length) {
+    const avg = rows.reduce((a, r) => a + r.pct, 0) / rows.length;
+    cards.push(card("food", "cost", "Food cost", fmtPct(avg), avg <= t.high ? pill("ok", "On target") : pill("bad", "Too high"),
+      `Goal is ${t.low} to ${t.high}%`));
+  } else cards.push(card("food", "recipes", "Food cost", "—", pill("watch", "No dishes yet"), "Add your recipes first"));
+
+  // 4. Food at risk (or menu health without use-by dates)
+  if (stockReady) {
+    const soon = soonToSpoil(7).filter((x) => x.i.on_hand == null || Number(x.i.on_hand) > 0);
+    const worth = soon.reduce((a, x) => a + (Number(x.i.on_hand) || 0) * x.i.cost, 0);
+    const urgent = soon.filter((x) => x.d <= 2).length;
+    cards.push(card("risk", "specials", "Food at risk this week", fmt0(worth), urgent ? pill("watch", `${urgent} ${urgent === 1 ? "item spoils" : "items spoil"} in 2 days`) : pill("ok", "Nothing urgent"),
+      `${soon.length} ${soon.length === 1 ? "item" : "items"} to use within 7 days`));
+  } else {
+    const red = rows.filter((r) => r.st === "red").length;
+    cards.push(card("menu", "cost", "Dishes on target", `${rows.length - red} of ${rows.length}`, red ? pill("bad", `${red} over target`) : pill("ok", "All on target"), ""));
+  }
+
+  // What needs someone today: at most three, most money first.
+  const todo = [];
+  const byMargin = rows.filter((r) => r.units > 0).sort((a, b) => b.margin - a.margin);
+  const fixDish = byMargin.find((r) => r.st === "red") || rows.filter((r) => r.st === "red").sort((a, b) => b.pct - a.pct)[0];
+  if (fixDish) {
+    const newPrice = Math.ceil(fixDish.cost / (t.high / 100));
+    todo.push({ goto: "cost", dish: fixDish.d.id, text: `Raise <b>${esc(fixDish.d.name)}</b> from ${fmt(fixDish.d.price)} to ${fmt(newPrice)}.`, why: `It costs ${fmtPct(fixDish.pct)} of its price to make; your limit is ${t.high}%.` });
+  }
+  const out86 = stockReady ? eightySixNow() : [];
+  if (out86.length) {
+    const stops = [...new Set(out86.flatMap((x) => x.dishes))];
+    todo.push({ goto: "ingredients", text: `<b>${esc(out86.map((x) => x.name).join(", "))}</b> ${out86.length === 1 ? "is" : "are"} 86'd.`, why: stops.length ? `That stops ${stops.map(esc).join(", ")}. Reorder or tell the servers.` : "Reorder or take it off tonight." });
+  }
+  if (stockReady) {
+    const urgent = soonToSpoil(2).filter((x) => x.i.on_hand == null || Number(x.i.on_hand) > 0)
+      .sort((a, b) => (Number(b.i.on_hand) || 0) * b.i.cost - (Number(a.i.on_hand) || 0) * a.i.cost).slice(0, 3);
+    if (urgent.length) todo.push({ goto: "specials", text: `Use up <b>${esc(urgent.map((x) => x.i.name).join(", "))}</b> in a special.`, why: "They spoil in the next two days." });
+  }
+  if (last) {
+    const d = reportFrom(last).data, s = reportStats(d);
+    if (s.injuries) todo.push({ goto: "mod", text: `Read last shift's <b>injury report</b>.`, why: `${s.injuries} injury noted by ${esc(last.manager || "the manager")}.` });
+    else if (String(d.followups || "").trim()) todo.push({ goto: "mod", text: `Follow up: ${esc(String(d.followups).split(/(?<=[.!?])\s+|\n+/)[0])}`, why: `From ${esc(last.manager || "the manager")}'s last report.` });
+  }
+
+  // Sales by day, last 7 days of shift reports
+  let chart = "";
+  if (last) {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const ds = addDays(last.report_date, -i);
+      const reps = modReports.filter((x) => x.report_date === ds);
+      const sales = reps.reduce((a, x) => a + (Number(reportFrom(x).data.sales) || 0), 0);
+      days.push({ ds, sales, has: reps.length > 0 });
+    }
+    const max = Math.max(1, ...days.map((x) => x.sales));
+    const best = days.reduce((a, x) => (x.sales > a.sales ? x : a), days[0]);
+    chart = `<section class="ov-block">
+      <div class="ov-h"><h3>Sales by Day</h3><span>Last 7 days from shift reports | best day: ${parseDay(best.ds).toLocaleDateString(undefined, { weekday: "long" })}</span></div>
+      <div class="ov-bars">${days.map((x) => `<div class="ov-bar${x === best ? " best" : ""}">
+        <span class="ov-day">${parseDay(x.ds).toLocaleDateString(undefined, { weekday: "short" })}</span>
+        <span class="ov-track">${x.has ? `<span style="width:${((x.sales / max) * 100).toFixed(1)}%"></span>` : ""}</span>
+        <span class="ov-amt mono">${x.has ? fmt0(x.sales) : "Closed"}</span></div>`).join("")}</div>
+    </section>`;
+  }
+
+  el.innerHTML = `
+    <div class="ov-wrap">
+      <div class="ov-hello"><h2>${hello}</h2><p>${now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} | ${esc(rest.name)}</p></div>
+      <div class="ov-cards">${cards.join("")}</div>
+      <section class="ov-block ov-todo">
+        <div class="ov-h"><h3>What Needs You Today</h3></div>
+        ${todo.length ? `<ol>${todo.slice(0, 3).map((x) => `<li><button type="button" class="ov-do" data-goto="${x.goto}"${x.dish ? ` data-ov-dish="${x.dish}"` : ""}><span class="ov-do-t">${x.text}</span><span class="ov-do-w">${x.why}</span></button></li>`).join("")}</ol>`
+          : `<p class="ov-clear">Nothing needs you right now. Enjoy the shift.</p>`}
+      </section>
+      ${chart}
+      <p class="ov-more"><button type="button" class="linkbtn" data-goto="home">Show me the details</button></p>
+    </div>`;
 }
 
 // ---------------------------------------------------------- Tonight
@@ -3200,7 +3341,9 @@ function goTo(page) {
     if (!confirm("You have unsaved changes to this report. Leave without saving?")) return;
     modDirty = false; modDraft = null; editingReportId = null;
   }
-  const toTonight = page === "home" && activePage !== "home";
+  const fromOverview = viewMode === "overview";
+  if (fromOverview) { viewMode = "details"; safeSet("line.mode", viewMode); }
+  const toTonight = page === "home" && (activePage !== "home" || fromOverview);
   activePage = page;
   window.scrollTo({ top: 0 });
   render();
@@ -3249,7 +3392,8 @@ function wireControls() {
     setAllPinned(pinAll);
     if (!pinAll) goTo("home");                          // no tabs left: show Tonight
   });
-  $("brandHome").addEventListener("click", () => goTo("home"));
+  $("brandHome").addEventListener("click", () => (viewMode === "overview" ? render() : goTo("home")));
+  document.querySelectorAll("[data-viewmode]").forEach((b) => b.addEventListener("click", () => setViewMode(b.dataset.viewmode)));
   $("tonight").addEventListener("click", onTonightClick);
 
   // Settings dialog
@@ -3295,7 +3439,7 @@ function wireControls() {
   // Buttons that jump to another tab or open a recipe
   document.addEventListener("click", (e) => {
     const g = e.target.closest("[data-goto]");
-    if (g) { goTo(g.dataset.goto); return; }
+    if (g) { if (g.dataset.ovDish) selectedDishId = g.dataset.ovDish; goTo(g.dataset.goto); return; }
     const ed = e.target.closest("[data-edit-dish]");
     if (ed) { if (startEditing(ed.dataset.editDish)) goTo("recipes"); }
   });

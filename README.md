@@ -207,6 +207,8 @@ This makes sure any email links (for example, password resets) send people to yo
 
 | Tab | What you can do |
 |---|---|
+| **Overview** (switch in the header) | The high-level view for owners and executives: sales this week, last shift, food cost and food at risk in four big cards, up to three things that need you today, and sales by day. Tap anything to open Details, the full app. The app remembers which one you picked. |
+| **Tonight** | The Details home page: tickets for what needs the manager tonight and how the week is going |
 | **Cost Tracker** | See every dish's food cost %, and click a dish for the breakdown |
 | **Performance** | Stars, plowhorses, puzzles, and dogs for the week chosen in the "Sales week" box |
 | **Weekly Sales** | Type plates sold per dish for any week, then click **Save this week** |
