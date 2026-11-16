@@ -343,6 +343,22 @@ footer { color: var(--ink-2); }
    lettering, --mp-body the rest. */
 .menu-poster { font-family: var(--mp-body, var(--mp-font)); }
 .menu-poster .mp-name { font-family: var(--mp-font); }
+
+/* A holdable portrait card (5.5 × 8.5 in, half a letter sheet), centered.
+   Sizes inside follow the card's width (cqw), not the window's, so every
+   layout fits the narrow shape. Longer menus just make the card taller. */
+#menuResult { container-type: inline-size; }   /* lets the card size itself from the space it has */
+#menuResult .menu-poster {
+  max-width: 520px; margin: 4px auto 16px; min-height: calc(min(520px, 100cqw) * 8.5 / 5.5);   /* at least 5.5 × 8.5, taller if needed */
+  container-type: inline-size; padding: 36px 28px 40px; --mp-pad: 28px;   /* top/bottom match the border strips' -36/-40px */
+}
+#menuResult .menu-poster .mp-title { font-size: clamp(28px, 10cqw, 52px); }
+.menu-poster .mp-tag { font-size: clamp(14px, 3.4cqw, 17px); }
+.menu-poster .mp-name { font-size: clamp(16px, 4.2cqw, 21px); }
+.menu-poster .mp-price { font-size: clamp(15px, 4cqw, 20px); }
+.menu-poster .mp-desc { font-size: clamp(13px, 3.1cqw, 15px); }
+.menu-poster .mp-picture { max-width: 100%; max-height: 220px; }
+.menu-poster .mp-motif { width: 38px; height: 38px; }
 .menu-poster.restyled { animation: mp-restyle .55s cubic-bezier(.2,.8,.2,1); }
 @keyframes mp-restyle { from { opacity: .25; transform: scale(.985); } }
 .mp-dateline { display: none; }
@@ -362,7 +378,7 @@ footer { color: var(--ink-2); }
 
 /* Diner: double red rule, pill badge, dotted lines to the prices */
 #menuResult .menu-poster.lay-diner { border: 6px double var(--mp-accent); outline: 2px solid var(--mp-accent); outline-offset: -16px; border-radius: 0; }
-#menuResult .menu-poster.lay-diner .mp-title { font-weight: 400; font-size: clamp(42px, 8vw, 76px); }
+#menuResult .menu-poster.lay-diner .mp-title { font-weight: 400; font-size: clamp(34px, 13cqw, 64px); }
 .lay-diner .mp-kicker { display: inline-block; background: var(--mp-accent2); color: var(--mp-bg); padding: 6px 14px; border-radius: 999px; transform: rotate(-3deg); }
 .lay-diner .mp-item { border-top: none; }
 .lay-diner .mp-name { font-family: var(--mp-body); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
@@ -375,11 +391,11 @@ footer { color: var(--ink-2); }
 .lay-news .mp-dateline { display: flex; justify-content: space-between; gap: 10px; font: 700 11px Verdana, Geneva, sans-serif; letter-spacing: .12em; text-transform: uppercase; border-bottom: 4px double var(--mp-ink); padding-bottom: 6px; margin-bottom: 16px; }
 .lay-news .mp-tag { text-align: center; font-style: italic; }
 .lay-news .mp-motifs, .lay-news .mp-sayings { justify-content: center; }
-.lay-news .mp-items { max-width: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.lay-news .mp-item { border-top: none; padding: 0 14px 12px; border-left: 1px solid var(--mp-ink); }
-.lay-news .mp-item:nth-child(3n+2) { border-left: none; padding-left: 0; }
+.lay-news .mp-items { max-width: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lay-news .mp-item { border-top: none; padding: 0 12px 12px; border-left: 1px solid var(--mp-ink); }
+.lay-news .mp-item:nth-child(2n) { border-left: none; padding-left: 0; }
 .lay-news .mp-item:first-child { grid-column: 1 / -1; border-left: none; padding: 0 0 14px; border-bottom: 2px solid var(--mp-ink); margin-bottom: 14px; }
-.lay-news .mp-item:first-child .mp-name { font-size: clamp(26px, 4.2vw, 40px); line-height: 1.05; }
+.lay-news .mp-item:first-child .mp-name { font-size: clamp(22px, 7.5cqw, 36px); line-height: 1.05; }
 .lay-news .mp-item:first-child .mp-desc { font-style: italic; font-size: 16px; }
 .lay-news .mp-line { flex-direction: column; align-items: flex-start; gap: 4px; }
 .lay-news .mp-name { font-weight: 400; line-height: 1.1; }
@@ -389,20 +405,20 @@ footer { color: var(--ink-2); }
 
 /* Game-day poster: huge title, every dish in its own bold block */
 #menuResult .menu-poster.lay-poster { text-align: left; border-radius: 0; }
-#menuResult .menu-poster.lay-poster .mp-title { text-transform: uppercase; font-weight: 400; font-size: clamp(52px, 11vw, 116px); line-height: .88; }
+#menuResult .menu-poster.lay-poster .mp-title { text-transform: uppercase; font-weight: 400; font-size: clamp(42px, 17cqw, 92px); line-height: .88; }
 .lay-poster .mp-kicker { display: inline-block; background: var(--mp-accent2); color: var(--mp-bg); padding: 6px 12px; }
 .lay-poster .mp-motifs, .lay-poster .mp-sayings { justify-content: flex-start; }
 .lay-poster .mp-items { max-width: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .lay-poster .mp-item { border-top: none; padding: 14px 16px; background: color-mix(in srgb, var(--mp-ink) 10%, transparent); border-left: 6px solid var(--mp-accent); display: flex; flex-direction: column; gap: 8px; }
 .lay-poster .mp-line { display: contents; }
 .lay-poster .mp-course { order: 0; }
-.lay-poster .mp-name { order: 1; font-weight: 400; text-transform: uppercase; font-size: 26px; line-height: .95; }
+.lay-poster .mp-name { order: 1; font-weight: 400; text-transform: uppercase; font-size: clamp(18px, 5.4cqw, 26px); line-height: .95; }
 .lay-poster .mp-desc { order: 2; margin: 0; }
 .lay-poster .mp-dots { display: none; }
 .lay-poster .mp-price { order: 3; align-self: flex-start; margin-top: auto; background: var(--mp-accent); color: var(--mp-bg); padding: 2px 10px; }
 
 /* Bistro card: quiet, centered, a thin frame and lots of white space */
-#menuResult .menu-poster.lay-bistro { border-top: none; border-radius: 0; box-shadow: inset 0 0 0 14px var(--mp-bg), inset 0 0 0 15px var(--mp-accent); padding: 56px clamp(28px, 10vw, 110px) 48px; }
+#menuResult .menu-poster.lay-bistro { border-top: none; border-radius: 0; box-shadow: inset 0 0 0 14px var(--mp-bg), inset 0 0 0 15px var(--mp-accent); padding: 52px 40px 46px; --mp-pad: 40px; }
 #menuResult .menu-poster.lay-bistro .mp-title { font-style: italic; font-weight: 500; }
 .lay-bistro .mp-kicker { letter-spacing: .4em; font-weight: 400; }
 .lay-bistro .mp-items { text-align: center; max-width: 460px; }
@@ -439,6 +455,7 @@ footer { color: var(--ink-2); }
   #menuResult { border: none !important; padding: 0 !important; }
   #menuResult .chart-head, #menuResult .mp-details, #menuResult .menu-look, #menuResult .menu-vibe, #menuResult .pic-note, #menuResult .blade-track { display: none !important; }   /* print just the menu */
   .menu-poster.restyled { animation: none; }
+  #menuResult .menu-poster { width: 5.5in; max-width: 5.5in; min-height: 8.5in; margin: 0 auto; }   /* a half-letter card */
   .menu-poster { margin: 0; }
 }
 
