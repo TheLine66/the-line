@@ -255,8 +255,10 @@ async function handleSession(session) {
   user = session?.user || null;
   rest = null;
   resetWhatIf();
-  activePage = "home";                                 // every sign-in opens on Tonight
-  if (!user) { safeSet(TABS_KEY, "[]"); show("authScreen"); return; }   // signed out: no tabs kept
+  // Every sign-in, sign-out and page refresh starts fresh: no tabs kept, Tonight open.
+  activePage = "home";
+  safeSet(TABS_KEY, "[]");
+  if (!user) { show("authScreen"); return; }
   $("userEmail").textContent = user.email || "";
   try { await loadRestaurants(); }
   catch (e) { console.error(e); show("onboardScreen"); $("onboardMsg").textContent = friendlyError(e); }
@@ -758,36 +760,80 @@ function renderPerf() {
   renderPerfTable(byMargin, totalMargin, avgUnits, avgMargin);
 }
 
-// The menu matrix as four labeled boxes instead of a scatter plot, so it
-// reads in five seconds: which box a dish is in, and what to do about it.
-// Right column = sells more than the average dish; top row = earns more
-// per plate than the average dish.
+// The menu matrix: every dish placed by how many plates it sells (across)
+// and how much profit each plate makes (up). The dashed lines are the
+// average dish, so each corner is a type with its own advice. One color per
+// corner, every dish named, nothing else encoded: readable in five seconds.
 const QUADS = {
-  puzzle:    { name: "Puzzles",    what: "Profitable, but slow",   act: "Sell more: move it up the menu or have servers suggest it." },
-  star:      { name: "Stars",      what: "Popular and profitable", act: "Keep it. Don't change the recipe or the price much." },
-  dog:       { name: "Dogs",       what: "Slow and thin margin",   act: "Fix the cost or price, or take it off the menu." },
-  plowhorse: { name: "Plowhorses", what: "Popular, thin margin",   act: "Raise the price a little or trim the portion cost." },
+  star:      { name: "Stars",      act: "Keep them as they are",   color: "var(--good)" },
+  plowhorse: { name: "Plowhorses", act: "Raise price or trim cost", color: "var(--watch)" },
+  puzzle:    { name: "Puzzles",    act: "Promote them more",        color: "var(--puzzle)" },
+  dog:       { name: "Dogs",       act: "Fix them or drop them",    color: "var(--over)" },
 };
 function renderQuadrantChart(rows, avgUnits, avgMargin) {
-  const groups = { puzzle: [], star: [], dog: [], plowhorse: [] };
-  for (const r of rows) groups[quadrantOf(r.units, r.marginPerPlate, avgUnits, avgMargin)].push(r);
-  for (const k in groups) groups[k].sort((a, b) => b.weeklyMargin - a.weeklyMargin);
-  const box = (k) => {
-    const q = QUADS[k], list = groups[k];
-    return `<section class="mq mq-${k}" aria-label="${q.name}">
-      <div class="mq-head"><h4>${q.name}</h4><span class="mq-count">${list.length} ${list.length === 1 ? "dish" : "dishes"}</span></div>
-      <div class="mq-what">${q.what}</div>
-      <p class="mq-act">${q.act}</p>
-      ${list.length ? `<ul>${list.map((r) => `<li><span>${esc(r.d.name)}</span><span class="mono">${r.units} sold | ${fmt(r.marginPerPlate)}</span></li>`).join("")}</ul>` : `<p class="mq-none">None this week.</p>`}
-    </section>`;
+  const W = 760, H = 470, L = 62, R = 18, T = 18, B = 52;
+  const pts = rows.filter((r) => r.units > 0);
+  const maxU = Math.max(1, ...pts.map((r) => r.units)) * 1.12;
+  const hiM = Math.max(1, ...pts.map((r) => r.marginPerPlate)) * 1.3;   // headroom so dots stay clear of the corner labels
+  const loM = Math.min(0, ...pts.map((r) => r.marginPerPlate));
+  const x = (u) => L + (u / maxU) * (W - L - R);
+  const y = (m) => T + (1 - (m - loM) / (hiM - loM)) * (H - T - B);
+  const ax = x(avgUnits), ay = y(avgMargin);
+  const font = `font-family="Verdana, Geneva, sans-serif"`;
+  const tx = (xx, yy, txt, o = "") => `<text x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" ${font} ${o}>${txt}</text>`;
+
+  // Shaded corners, each with its name and what to do
+  const area = (x1, y1, x2, y2, k) => `<rect x="${x1.toFixed(1)}" y="${y1.toFixed(1)}" width="${(x2 - x1).toFixed(1)}" height="${(y2 - y1).toFixed(1)}" style="fill:${QUADS[k].color}" fill-opacity="0.09"/>`;
+  const corner = (k, left, top) => {
+    const q = QUADS[k], xx = left ? L + 10 : W - R - 10, yy = top ? T + 22 : H - B - 26, anchor = left ? "start" : "end";
+    return tx(xx, yy, q.name, `font-size="17" font-weight="700" text-anchor="${anchor}" style="fill:${q.color}"`) +
+      tx(xx, yy + 17, q.act, `font-size="12" font-weight="600" text-anchor="${anchor}" style="fill:var(--ink)"`);
   };
-  $("matrixNote").textContent = `Compared with your average dish: ${Math.round(avgUnits)} sold a week, ${fmt(avgMargin)} profit per plate`;
+  // Keep dish names off the corner titles, the dots and each other.
+  const boxes = [
+    { l: L, r: L + 190, t: T, b: T + 46 }, { l: W - R - 190, r: W - R, t: T, b: T + 46 },
+    { l: L, r: L + 190, t: H - B - 46, b: H - B }, { l: W - R - 190, r: W - R, t: H - B - 46, b: H - B },
+  ];
+  const hit = (bx) => bx.l < L || bx.r > W - R || bx.t < T || bx.b > H - B || boxes.some((o) => bx.l < o.r && bx.r > o.l && bx.t < o.b && bx.b > o.t);
+  for (const r of pts) { const cx = x(r.units), cy = y(r.marginPerPlate); boxes.push({ l: cx - 7, r: cx + 7, t: cy - 7, b: cy + 7 }); }
+  const dots = [], labels = [];
+  for (const r of [...pts].sort((a, b) => b.weeklyMargin - a.weeklyMargin)) {
+    const q = quadrantOf(r.units, r.marginPerPlate, avgUnits, avgMargin);
+    const cx = x(r.units), cy = y(r.marginPerPlate);
+    const name = r.d.name.length > 24 ? r.d.name.slice(0, 23) + "…" : r.d.name;
+    const w = name.length * 6.6 + 4, h = 14;
+    const spots = [[cx + 10, cy + 4, "start"], [cx - 10, cy + 4, "end"], [cx, cy - 11, "middle"], [cx, cy + 20, "middle"],
+      [cx + 10, cy - 8, "start"], [cx - 10, cy - 8, "end"], [cx + 10, cy + 16, "start"], [cx - 10, cy + 16, "end"]];
+    let placed = null;
+    for (const [lx, ly, an] of spots) {
+      const l = an === "start" ? lx : an === "end" ? lx - w : lx - w / 2;
+      const bx = { l, r: l + w, t: ly - h + 3, b: ly + 3 };
+      if (!hit(bx)) { placed = [lx, ly, an]; boxes.push(bx); break; }
+    }
+    dots.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="6.5" style="fill:${QUADS[q].color};stroke:var(--surface)" stroke-width="2"><title>${esc(r.d.name)}: ${r.units} sold a week, ${fmt(r.marginPerPlate)} profit per plate</title></circle>`);
+    if (placed) labels.push(tx(placed[0], placed[1], esc(name), `font-size="11.5" font-weight="600" text-anchor="${placed[2]}" style="fill:var(--ink)"`));
+  }
+  // Light tick marks so the numbers can be read off
+  const step = (span, n) => { const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 5, 10].map((m) => m * p).find((v) => v >= raw); };
+  const ux = step(maxU, 5), my = step(hiM - loM, 4);
+  let ticks = "";
+  for (let u = 0; u <= maxU; u += ux) ticks += `<line x1="${x(u)}" y1="${H - B}" x2="${x(u)}" y2="${H - B + 5}" style="stroke:var(--ink)" stroke-opacity="0.4"/>` + tx(x(u), H - B + 18, String(u), `font-size="11" text-anchor="middle" style="fill:var(--ink)"`);
+  for (let m = Math.ceil(loM / my) * my; m <= hiM; m += my) ticks += `<line x1="${L - 5}" y1="${y(m)}" x2="${L}" y2="${y(m)}" style="stroke:var(--ink)" stroke-opacity="0.4"/>` + tx(L - 9, y(m) + 4, `$${m}`, `font-size="11" text-anchor="end" style="fill:var(--ink)"`);
+
+  $("matrixNote").textContent = `Dashed lines = your average dish: ${Math.round(avgUnits)} sold a week, ${fmt(avgMargin)} profit per plate`;
   $("quadrantChart").innerHTML = `
-    <div class="matrix">
-      <div class="mx-y" aria-hidden="true"><span>More profit per plate</span></div>
-      <div class="mx-grid">${box("puzzle")}${box("star")}${box("dog")}${box("plowhorse")}</div>
-      <div class="mx-x" aria-hidden="true"><span>Sells more</span></div>
-    </div>`;
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Menu matrix: plates sold per week versus profit per plate">
+      ${area(L, T, ax, ay, "puzzle")}${area(ax, T, W - R, ay, "star")}${area(L, ay, ax, H - B, "dog")}${area(ax, ay, W - R, H - B, "plowhorse")}
+      <line x1="${ax}" y1="${T}" x2="${ax}" y2="${H - B}" style="stroke:var(--ink)" stroke-opacity="0.45" stroke-dasharray="5 4"/>
+      <line x1="${L}" y1="${ay}" x2="${W - R}" y2="${ay}" style="stroke:var(--ink)" stroke-opacity="0.45" stroke-dasharray="5 4"/>
+      <line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" style="stroke:var(--ink)" stroke-opacity="0.6"/>
+      <line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" style="stroke:var(--ink)" stroke-opacity="0.6"/>
+      ${corner("puzzle", true, true)}${corner("star", false, true)}${corner("dog", true, false)}${corner("plowhorse", false, false)}
+      ${ticks}
+      ${tx((L + W - R) / 2, H - 8, "Plates sold per week →", `font-size="13" font-weight="700" text-anchor="middle" style="fill:var(--ink)"`)}
+      ${tx(16, (T + H - B) / 2, "Profit per plate →", `font-size="13" font-weight="700" text-anchor="middle" transform="rotate(-90 16 ${(T + H - B) / 2})" style="fill:var(--ink)"`)}
+      ${dots.join("")}${labels.join("")}
+    </svg>`;
 }
 
 function renderPerfTable(sorted, totalMargin, avgUnits, avgMargin) {
@@ -1104,20 +1150,21 @@ function renderIngredients() {
     const ing = [...ingredients.values()].find((i) => i.name === x.name);
     return `<li><strong>${esc(x.name)}</strong>${x.dishes.length ? `<span>Stops: ${x.dishes.map(esc).join(", ")}</span>` : ""}<button class="linkbtn" data-86="${ing?.id}" type="button">Back in stock</button></li>`; }).join("")}</ul>` : "";
   if (!ingredients.size) { $("ingTable").innerHTML = `<tbody><tr><td class="muted">No ingredients yet. Add one above.</td></tr></tbody>`; return; }
-  const cols = stockReady ? 7 : 5;
+  const cols = stockReady ? 8 : 5;
   $("ingTable").innerHTML = `
-    <thead><tr><th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th>${stockReady ? `<th class="num">On hand</th><th>Use by</th>` : ""}<th>Used in</th><th></th></tr></thead>
+    <thead><tr>${stockReady ? `<th class="c86">86</th>` : ""}<th>Ingredient</th><th>Unit</th><th class="num">Cost per unit ($)</th>${stockReady ? `<th class="num">On hand</th><th>Use by</th>` : ""}<th>Used in</th><th></th></tr></thead>
     <tbody>${list.map((i) => {
       const used = usage.get(i.id) || [];
       const out = i.on_hand !== null && Number(i.on_hand) === 0;
       return `<tr data-row="${i.id}" class="${out ? "is86" : ""}">
+        ${stockReady ? `<td class="c86"><button class="btn86 ${out ? "on" : ""}" data-86="${i.id}" type="button" aria-pressed="${out}" title="${out ? "Back in stock" : "Out of it: 86 it"}">${out ? "86'd" : "86"}</button></td>` : ""}
         <td><input data-id="${i.id}" data-field="name" value="${esc(i.name)}" maxlength="100" aria-label="Name"></td>
         <td style="width:90px"><input data-id="${i.id}" data-field="unit" value="${esc(i.unit)}" maxlength="20" list="unitList" aria-label="Unit"></td>
         <td class="num" style="width:140px"><input class="num mono" data-id="${i.id}" data-field="cost" type="number" min="0" step="0.01" value="${trimNum(i.cost)}" aria-label="Cost"></td>
         ${stockReady ? `<td class="num" style="width:110px"><input class="num mono" data-id="${i.id}" data-field="on_hand" type="number" min="0" step="0.5" value="${i.on_hand == null ? "" : trimNum(i.on_hand)}" placeholder="—" aria-label="On hand"></td>
         <td style="width:250px"><div class="useby"><input data-id="${i.id}" data-field="use_by" type="date" value="${i.use_by || ""}" aria-label="Use by"><span data-tag="${i.id}">${spoilTag(i)}</span></div></td>` : ""}
         <td class="used" title="${esc(used.join(", "))}">${used.length ? `${used.length} dish${used.length > 1 ? "es" : ""}` : "—"}</td>
-        <td class="num nowrap">${stockReady ? `<button class="btn86 ${out ? "on" : ""}" data-86="${i.id}" type="button" aria-pressed="${out}" title="${out ? "Back in stock" : "Out of it: 86 it"}">${out ? "86'd" : "86"}</button>` : ""}<button class="iconbtn" data-del-ing="${i.id}" type="button" aria-label="Delete ${esc(i.name)}">✕</button></td>
+        <td class="num"><button class="iconbtn" data-del-ing="${i.id}" type="button" aria-label="Delete ${esc(i.name)}">✕</button></td>
       </tr>`;
     }).join("") || `<tr><td colspan="${cols}" class="muted">Nothing matches "${esc(q)}".</td></tr>`}</tbody>`;
 }

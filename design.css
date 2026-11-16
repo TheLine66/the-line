@@ -520,11 +520,12 @@ em, cite, address, dfn, var { font-style: normal; }
 .mod-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0 12px; }
 .hero-card { background: var(--surface); border: 1px solid var(--line); border-top: 4px solid var(--green); border-radius: 8px; padding: 16px 20px 14px; }
 .hero-lbl { font-size: 15px; font-weight: 700; }
-.hero-num { font-size: clamp(40px, 6vw, 58px); font-weight: 700; line-height: 1.05; margin: 4px 0 6px; letter-spacing: -0.01em; }
+.hero-num { font-size: clamp(32px, 4.4vw, 42px); font-weight: 700; line-height: 1.05; margin: 4px 0 6px; letter-spacing: -0.01em; }
 .hero-sub { font-size: 14px; min-height: 1.4em; }
 .hero-sub .up { color: var(--good); font-weight: 700; }
 .hero-sub .down { color: var(--over); font-weight: 700; }
-#modEditor .preview { margin-bottom: 18px; }
+#modEditor .preview { margin-bottom: 18px; justify-content: space-around; text-align: center; }
+#modEditor .preview > div { align-items: center; }
 .mod-secs { border-top: 2px solid var(--ink); margin-bottom: 22px; }
 .mod-sec { border-bottom: 1px solid var(--line-strong); }
 .mod-sec > summary { display: flex; align-items: center; gap: 12px; padding: 14px 4px; cursor: pointer; list-style: none; }
@@ -566,7 +567,8 @@ table.sched tfoot td { border-bottom: none; border-top: 2px solid var(--ink); fo
 
 /* Ingredients: 86 and invoice scanning */
 .nowrap { white-space: nowrap; }
-.btn86 { font: 700 12px Verdana, Geneva, sans-serif; padding: 5px 9px; margin-right: 6px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; }
+.c86 { width: 64px; }
+.btn86 { font: 700 12px Verdana, Geneva, sans-serif; padding: 5px 9px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; }
 .btn86.on { background: var(--over); border-color: var(--over); color: #fff; }
 #ingTable tr.is86 td input { text-decoration: line-through; }
 #ingTable tr.is86 td input[data-field="on_hand"] { text-decoration: none; font-weight: 700; color: var(--over); }
