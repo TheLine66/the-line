@@ -20,6 +20,7 @@ function show(id) {
 // styles.css cut it and open the space between the words.
 function playLogoSplice(wm) {
   if (!wm || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  wm.dataset.cutAt = Date.now();            // so a hover doesn't restart a cut that's still running
   // Measure a space in this font so the words close up exactly.
   const probe = document.createElement("i");
   probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;word-spacing:0;font:inherit";
@@ -3406,6 +3407,14 @@ function wireControls() {
     if (!pinAll) goTo("home");                          // no tabs left: show Tonight
   });
   $("brandHome").addEventListener("click", () => (viewMode === "overview" ? render() : goTo("home")));
+  // Hover the logo with a mouse and the blade cuts it again (not on touch; waits for a run to finish).
+  const spliceOnHover = (area, logo) => area && logo && area.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "mouse") return;
+    if (Date.now() - (Number(logo.dataset.cutAt) || 0) < 1500) return;
+    playLogoSplice(logo);
+  });
+  spliceOnHover($("headerLogo")?.closest(".brand"), $("headerLogo"));
+  spliceOnHover($("authLogo"), $("authLogo"));
   document.querySelectorAll("[data-viewmode]").forEach((b) => b.addEventListener("click", () => setViewMode(b.dataset.viewmode)));
   $("tonight").addEventListener("click", onTonightClick);
 
