@@ -1001,20 +1001,38 @@ function renderOverview() {
 }
 
 // ---------------------------------------------------------- Procurement
-// Where this restaurant can buy what it needs, on a map around its address.
-// Free, keyless data: the address is placed on the map by OpenStreetMap's
-// Nominatim, and nearby sources come from OpenStreetMap (Overpass API):
-//   - Distributors: broadline warehouses like Sysco and US Foods
-//   - Wholesale: clubs and cash-and-carry like Costco, Sam's Club, Restaurant Depot
-//   - Local: farmers markets, farm stands, butchers, seafood markets, produce stands, cheese shops
-// Each ingredient is sorted into a group (produce, meat, ...) so picking a group
-// shows only the places that sell it. Lookups are cached in this browser.
+// Where this restaurant can buy what it needs, on a Google map around its
+// address. Places come from Google Maps (Places API), searched in the browser
+// with a Google Maps key that the /api/maps-key helper hands to signed-in
+// users (the key lives in Vercel's settings, never in this code):
+//   - Distributors: Sysco, US Foods, Performance Foodservice, Gordon Food Service
+//   - Wholesale clubs: Costco, Sam's Club, Restaurant Depot, BJ's
+//   - Local: farmers markets, farm stands, butchers, seafood, produce and cheese shops
+// Google's rules: its places are shown only on a Google map, and aren't saved;
+// results are kept only while the page is open.
 const PROC_TYPES = {
   distributor: { name: "Distributors", color: "#2B4C7E", what: "Broadline delivery, by account" },
   wholesale:   { name: "Wholesale clubs", color: "#B8902C", what: "Buy in bulk, pick up yourself" },
   local:       { name: "Local farms & markets", color: "#3F7D3A", what: "Farmers markets, farms, butchers, fish and produce shops" },
 };
-const LOCAL_KINDS = { market: "Farmers market", farm: "Farm stand", butcher: "Butcher", seafood: "Seafood market", greengrocer: "Produce stand", cheese: "Cheese shop" };
+const LOCAL_KINDS = { market: "Farmers market", farm: "Farm stand", butcher: "Butcher", seafood: "Seafood market", greengrocer: "Produce market", cheese: "Cheese shop" };
+// What to search Google for. Brand searches keep only results with that brand in the name.
+const PLACE_SEARCHES = [
+  { q: "Sysco foodservice distribution", type: "distributor", kind: "Distributor", brand: /sysco/i, far: true },
+  { q: "US Foods distribution center", type: "distributor", kind: "Distributor", brand: /us ?foods/i, far: true },
+  { q: "Performance Foodservice", type: "distributor", kind: "Distributor", brand: /performance food/i, far: true },
+  { q: "Gordon Food Service", type: "distributor", kind: "Distributor", brand: /gordon food|gfs/i, far: true },
+  { q: "Costco Wholesale", type: "wholesale", kind: "Wholesale club", brand: /costco/i },
+  { q: "Sam's Club", type: "wholesale", kind: "Wholesale club", brand: /sam'?s club/i },
+  { q: "Restaurant Depot", type: "wholesale", kind: "Wholesale club", brand: /restaurant depot/i },
+  { q: "BJ's Wholesale Club", type: "wholesale", kind: "Wholesale club", brand: /bj'?s wholesale/i },
+  { q: "farmers market", type: "local", kind: "market" },
+  { q: "farm stand", type: "local", kind: "farm" },
+  { q: "butcher shop", type: "local", kind: "butcher" },
+  { q: "seafood market", type: "local", kind: "seafood" },
+  { q: "produce market", type: "local", kind: "greengrocer" },
+  { q: "cheese shop", type: "local", kind: "cheese" },
+];
 // Ingredient groups: the words that put an ingredient in a group, and where to buy that group.
 const PROC_CATS = [
   { id: "seafood", name: "Seafood", words: /\b(cod|fish|salmon|shrimp|prawn|crab|lobster|oyster|clam|mussel|scallop|tuna|tilapia|haddock|halibut|catfish|trout)\b/i, from: ["seafood", "wholesale", "distributor"] },
@@ -1027,14 +1045,12 @@ const PROC_CATS = [
 ];
 const CHAINS = [
   { name: "Sysco", match: /sysco/i, site: "https://www.sysco.com" },
-  { name: "US Foods", match: /us foods/i, site: "https://www.usfoods.com" },
+  { name: "US Foods", match: /us ?foods/i, site: "https://www.usfoods.com" },
   { name: "Performance Foodservice", match: /performance food/i, site: "https://www.performancefoodservice.com" },
   { name: "Gordon Food Service", match: /gordon food|gfs/i, site: "https://gfs.com" },
 ];
-const DIST_RE = "Sysco|US Foods|Performance Food|Gordon Food Service|Reinhart|Ben E\\\\. Keith|Shamrock Foods|Cheney Brothers|Chefs' Warehouse";
-const CLUB_RE = "Costco|Sam's Club|Restaurant Depot|BJ's Wholesale|Smart & Final|Chef'Store|Jetro|GFS Store|Gordon Food Service Store|Webstaurant";
 
-let proc = { cat: "all", radius: 25, show: new Set(["distributor", "wholesale", "local"]), geo: null, sources: null, status: "", map: null, layer: null, loadingFor: "" };
+let proc = { cat: "all", radius: 25, show: new Set(["distributor", "wholesale", "local"]), geo: null, sources: null, map: null, pins: [], info: null, loadingFor: "", found: {} };
 
 function ingredientCategory(name) {
   // Sauces, gravies and batters are pantry items even if they name a food ("Guinness BBQ sauce").
@@ -1061,23 +1077,31 @@ function procCache(key, val) {
   try { safeSet(key, JSON.stringify(val)); } catch { /* storage full: skip */ }
 }
 
-// Leaflet (the map library) loads only when this page is first opened.
-let leafletReady = null;
-function loadLeaflet() {
-  if (window.L) return Promise.resolve();
-  if (leafletReady) return leafletReady;
-  leafletReady = new Promise((resolve, reject) => {
-    const css = document.createElement("link");
-    css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css";
-    document.head.appendChild(css);
-    const js = document.createElement("script");
-    js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
-    js.onload = () => resolve(); js.onerror = () => { leafletReady = null; reject(new Error("map library")); };
-    document.head.appendChild(js);
-  });
-  return leafletReady;
+// Google Maps loads only when this page is first opened, with the key from Vercel.
+let gmapsReady = null;
+function loadGoogleMaps() {
+  if (window.google?.maps?.importLibrary) return Promise.resolve();
+  if (gmapsReady) return gmapsReady;
+  gmapsReady = (async () => {
+    const { data } = await sb.auth.getSession();
+    const r = await fetch("/api/maps-key", { headers: { Authorization: `Bearer ${data.session?.access_token || ""}` } });
+    if (r.status === 503 || r.status === 404) { const e = new Error("not_configured"); e.code = "not_configured"; throw e; }
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.key) throw new Error(out.error || "key");
+    await new Promise((resolve, reject) => {
+      window.__lineMapsReady = resolve;
+      window.gm_authFailure = () => { proc.authFailed = true; procStatusLine("Google rejected the Maps key. Check that the key allows this website and that Maps JavaScript API and Places API (New) are turned on."); };
+      const s = document.createElement("script");
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(out.key)}&v=weekly&libraries=places&loading=async&callback=__lineMapsReady`;
+      s.async = true; s.onerror = () => reject(new Error("script"));
+      document.head.appendChild(s);
+    });
+  })();
+  gmapsReady.catch(() => { gmapsReady = null; });
+  return gmapsReady;
 }
 
+// The restaurant's address on the map (OpenStreetMap's free Nominatim; cached in this browser).
 async function geocodeRestaurant(r) {
   const addr = oneLineAddress(r);
   const cached = procCache(`line.geo.${r.id}`);
@@ -1094,88 +1118,36 @@ async function geocodeRestaurant(r) {
   return hit;
 }
 
-function classifySource(el, home) {
-  const t = el.tags || {}, name = String(t.name || "").trim();
-  const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
-  if (!name || lat == null || lon == null) return null;
-  let type, kind;
-  if (new RegExp(DIST_RE.replace(/\\\\/g, "\\"), "i").test(name)) { type = "distributor"; kind = "Distributor"; }
-  else if (t.shop === "wholesale" || new RegExp(CLUB_RE, "i").test(name)) { type = "wholesale"; kind = "Wholesale"; }
-  else if (t.amenity === "marketplace") { type = "local"; kind = "market"; }
-  else if (LOCAL_KINDS[t.shop]) { type = "local"; kind = t.shop; }
-  else return null;
-  const street = [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ");
-  return { id: `${el.type}${el.id}`, name, type, kind, lat, lon, miles: milesBetween(home, { lat, lon }),
-    address: [street, t["addr:city"]].filter(Boolean).join(", "), site: t.website || t["contact:website"] || "", phone: t.phone || t["contact:phone"] || "",
-    hours: t.opening_hours || "" };
+// A box around the restaurant, so results stay nearby.
+function boundsAround(home, miles) {
+  const dLat = miles / 69, dLon = miles / (69 * Math.cos((home.lat * Math.PI) / 180));
+  return { south: home.lat - dLat, north: home.lat + dLat, west: home.lon - dLon, east: home.lon + dLon };
 }
 
-// The free places search (Overpass) is run by volunteers, so it can be slow
-// or busy: try three servers, give each a time limit, and keep the search small.
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-async function overpass(query) {
-  const why = [];   // each server's answer, shown on the page if they all fail
-  for (const url of OVERPASS) {
-    const host = new URL(url).hostname, ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 30000);
-    try {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(query), signal: ctrl.signal });
-      if (res.ok) return await res.json();
-      // Overpass explains errors in a short web page; keep its first line of text.
-      const text = (await res.text().catch(() => "")).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      const said = (text.match(/Error:[^.]*\.?/) || [text])[0].slice(0, 160);
-      why.push(`${host}: error ${res.status}${said ? ` (${said})` : ""}`);
-    } catch (e) {
-      why.push(`${host}: ${e.name === "AbortError" ? "no answer in 30 seconds" : "couldn't connect (blocked or offline)"}`);
-    } finally { clearTimeout(timer); }
+// Search Google for every kind of source at once. Brand searches look out to
+// 100 miles (distributors deliver regionally); the rest stay within the chosen distance.
+async function findSources(home, miles) {
+  const { Place } = await google.maps.importLibrary("places");
+  const fields = ["id", "displayName", "location", "formattedAddress", "googleMapsURI", "businessStatus"];
+  const runs = await Promise.allSettled(PLACE_SEARCHES.map(async (s) => {
+    const { places } = await Place.searchByText({ textQuery: s.q, fields, locationRestriction: boundsAround(home, s.far ? 100 : miles), maxResultCount: 20 });
+    return (places || []).filter((p) => p.businessStatus !== "CLOSED_PERMANENTLY" && (!s.brand || s.brand.test(p.displayName || "")))
+      .map((p) => {
+        const lat = typeof p.location.lat === "function" ? p.location.lat() : p.location.lat, lon = typeof p.location.lng === "function" ? p.location.lng() : p.location.lng;
+        // A distributor's walk-in store (like a Gordon Food Service Store) is a wholesale stop, not delivery.
+        const store = s.type === "distributor" && /\bstore\b/i.test(p.displayName || "");
+        return { id: p.id, name: p.displayName || "", type: store ? "wholesale" : s.type, kind: store ? "Wholesale store" : s.kind, lat, lon, miles: milesBetween(home, { lat, lon }), address: p.formattedAddress || "", maps: p.googleMapsURI || "" };
+      });
+  }));
+  const failed = runs.filter((r) => r.status === "rejected");
+  if (failed.length === runs.length) {
+    const e = new Error("places"); e.details = [...new Set(failed.map((r) => String(r.reason?.message || r.reason).slice(0, 200)))]; throw e;
   }
-  const err = new Error("places search");
-  err.details = why;
-  throw err;
-}
-function toSources(data, home) {
+  // One place can show up in more than one search (a market that's also a farm stand): keep the first.
   const seen = new Set(), list = [];
-  for (const el of data.elements || []) {
-    const s = classifySource(el, home);
-    if (!s) continue;
-    const dupe = `${s.name.toLowerCase()}|${s.lat.toFixed(3)}|${s.lon.toFixed(3)}`;
-    if (seen.has(dupe)) continue;
-    seen.add(dupe); list.push(s);
-  }
-  return list;
-}
-// Step 1: local places and wholesale clubs within the chosen distance.
-// Step 2: distributor warehouses out to 100 miles (they deliver regionally).
-// Warehouses are buildings and lots, so step 2 only looks at those, which keeps it fast.
-async function findSources(home, miles, onFirst) {
-  const key = `line.src.${rest.id}.${miles}`;
-  const cached = procCache(key);
-  if (cached && cached.done && Date.now() - cached.t < 86400000 && Math.abs(cached.lat - home.lat) < 1e-6 && Math.abs(cached.lon - home.lon) < 1e-6) return cached.list;
-  const m = Math.round(miles * 1609.34), far = 160934;
-  const at = `${home.lat.toFixed(6)},${home.lon.toFixed(6)}`;
-  // Written in the plainest, oldest form of the search language so every server accepts it.
-  const each = (filter, r) => ["node", "way", "relation"].map((t) => `  ${t}${filter}(around:${r},${at});`).join("\n");
-  const near = await overpass(`[out:json][timeout:25];
-(
-${each('["amenity"="marketplace"]["name"]', m)}
-${each('["shop"~"^(farm|butcher|seafood|greengrocer|cheese|wholesale)$"]["name"]', m)}
-  way["name"~"${CLUB_RE}",i](around:${m},${at});
-);
-out center;`);
-  let list = toSources(near, home);
-  onFirst?.(list.slice().sort((x, y) => x.miles - y.miles));
-  try {
-    const dist = await overpass(`[out:json][timeout:25];
-(
-  way["name"~"${DIST_RE}",i](around:${far},${at});
-  relation["name"~"${DIST_RE}",i](around:${far},${at});
-  node["name"~"${DIST_RE}",i]["office"](around:${far},${at});
-);
-out center;`);
-    const have = new Set(list.map((s) => s.id));
-    list = list.concat(toSources(dist, home).filter((s) => !have.has(s.id)));
-  } catch { list.partial = true; }
-  list.sort((x, y) => x.miles - y.miles);
-  procCache(key, { t: Date.now(), lat: home.lat, lon: home.lon, list, done: !list.partial });
+  for (const r of runs) if (r.status === "fulfilled") for (const s of r.value) { if (!seen.has(s.id)) { seen.add(s.id); list.push(s); } }
+  list.sort((a, b) => a.miles - b.miles);
+  list.partial = failed.length > 0;
   return list;
 }
 
@@ -1190,10 +1162,12 @@ function procVisible() {
   });
 }
 
+function procStatusLine(msg) { const el = $("procStatus"); if (el) el.textContent = msg; }
+
 async function renderProcurement() {
   const el = $("page-procurement");
   if (!hasAddressCols(rest) || !rest.address_line1) {
-    proc.map?.remove(); proc.map = null;
+    procClearMap();
     el.innerHTML = `<div class="perf-wrap"><div class="chart-card empty">
       <h3>Add Your Restaurant's Address First</h3>
       <p>Procurement maps the places near ${esc(rest.name)} where you can buy what you need. It needs the full street address.</p>
@@ -1203,10 +1177,10 @@ async function renderProcurement() {
   }
   const needs = procNeeds();
   const cats = PROC_CATS.filter((c) => needs[c.id].length);
-  const cat = PROC_CATS.find((c) => c.id === proc.cat);
   if (proc.cat !== "all" && !cats.some((c) => c.id === proc.cat)) proc.cat = "all";
+  const cat = PROC_CATS.find((c) => c.id === proc.cat);
   if (!el.querySelector("#procMap")) {
-    proc.map?.remove(); proc.map = null;
+    procClearMap();
     el.innerHTML = `<div class="perf-wrap proc">
       <div class="chart-card">
         <div class="chart-head"><h3>Sourcing Near ${esc(rest.name)}</h3><span class="note" id="procWhere"></span></div>
@@ -1221,13 +1195,12 @@ async function renderProcurement() {
       </div>
       <div class="proc-grid">
         <div class="chart-card proc-map-card"><div id="procMap" role="region" aria-label="Map of nearby sources"></div>
-          <p class="note proc-credit"><span class="proc-dot proc-home"></span> ${esc(rest.name)} | dashed ring = your distance. Places from OpenStreetMap; hours and details can be out of date, so call before you go.</p></div>
+          <p class="note proc-credit"><span class="proc-dot proc-home"></span> ${esc(rest.name)} | dashed ring = your distance. Places from Google Maps; check hours before you go.</p></div>
         <div class="chart-card proc-list-card"><div class="chart-head"><h3>Nearby Sources</h3><span class="note" id="procCount"></span></div><div id="procList"></div></div>
       </div>
       <div class="chart-card"><div class="chart-head"><h3>Large Distributors</h3><span class="note">They deliver to restaurants by account, not walk-in</span></div><div id="procChains"></div></div>
     </div>`;
   }
-  // Ingredient groups
   $("procCats").innerHTML = [`<button type="button" class="proc-cat" data-proc-cat="all" aria-pressed="${proc.cat === "all"}">Everything <span>${ingredients.size}</span></button>`,
     ...cats.map((c) => { const out = needs[c.id].filter((x) => x.out).length;
       return `<button type="button" class="proc-cat${out ? " has-out" : ""}" data-proc-cat="${c.id}" aria-pressed="${proc.cat === c.id}">${c.name} <span>${needs[c.id].length}</span>${out ? `<b class="proc-out">${out} 86'd</b>` : ""}</button>`; })].join("");
@@ -1245,108 +1218,111 @@ async function renderProcurement() {
 }
 
 async function procLoad() {
-  const status = $("procStatus");
-  const want = `${rest.id}|${oneLineAddress(rest)}|${proc.radius}`;
-  const say = (msg, retry = false) => {
-    status.textContent = msg;
-    if (!proc.sources) $("procList").innerHTML = `<p class="proc-msg">${esc(msg)}</p>${retry ? `<button class="ghostbtn dark" id="procRetry" type="button">Try again</button>` : ""}`;
+  const want = `${rest.id}|${oneLineAddress(rest)}|${Math.max(proc.radius, 25)}`;
+  const say = (msg, opts = {}) => {
+    procStatusLine(msg);
+    if (!proc.sources) $("procList").innerHTML = `<p class="proc-msg">${msg}</p>${opts.retry ? `<button class="ghostbtn dark" id="procRetry" type="button">Try again</button>` : ""}${opts.details?.length ? `<details class="proc-why" open><summary>What Google said</summary><ul>${opts.details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></details>` : ""}`;
   };
-  try {
-    await loadLeaflet();
-  } catch { say("The map couldn't load. Check your internet connection.", true); return; }
-  if (!proc.geo || proc.geo.addr !== oneLineAddress(rest) || proc.loadingFor.split("|")[0] !== rest.id) {
+  if (!proc.geo || proc.geo.addr !== oneLineAddress(rest) || !proc.loadingFor.startsWith(rest.id)) {
     proc.sources = null;
     say("Finding your restaurant on the map…");
     try { proc.geo = await geocodeRestaurant(rest); } catch { proc.geo = null; }
-    if (!proc.geo) { say("Couldn't find that address on the map. Check it in Settings.", true); return; }
+    if (!proc.geo) { say("Couldn't find that address on the map. Check it in Settings.", { retry: true }); return; }
+  }
+  try {
+    await loadGoogleMaps();
+  } catch (err) {
+    if (err.code === "not_configured") {
+      say(`Google Maps isn't connected yet. Whoever set up The Line needs to add a <strong>GOOGLE_MAPS_KEY</strong> in Vercel's settings. The steps are in the README under "Procurement (Google Maps)".`);
+    } else say("Google Maps couldn't load. Check your internet connection.", { retry: true });
+    return;
   }
   procDrawMap();
+  if (proc.found[want]) proc.sources = proc.found[want];
   if (!proc.sources || proc.loadingFor !== want) {
     proc.loadingFor = want;
     proc.sources = null;
     procDrawSources();                              // your restaurant's pin, right away
-    say("Searching for places nearby. This can take up to 30 seconds…");
+    say("Searching Google Maps for places nearby…");
     try {
-      const found = await findSources(proc.geo, Math.max(proc.radius, 25), (first) => {
-        if (proc.loadingFor !== want) return;
-        proc.sources = first; procDrawSources();
-        status.textContent = "Still looking for distributor warehouses…";
-      });
-      if (proc.loadingFor !== want) return;         // the radius or restaurant changed meanwhile
-      proc.sources = found;
-      if (found.partial) { procDrawSources(); status.textContent = "Couldn't finish the distributor search. The rest is shown."; return; }
+      const found = await findSources(proc.geo, Math.max(proc.radius, 25));
+      if (proc.loadingFor !== want) return;         // the distance or restaurant changed meanwhile
+      proc.sources = proc.found[want] = found;
     } catch (err) {
       if (proc.loadingFor !== want) return;
       proc.loadingFor = "";
-      say("The free places search didn't answer. Wait a minute, then try again.", true);
-      if (err.details?.length) $("procList").insertAdjacentHTML("beforeend", `<details class="proc-why" open><summary>What each server said</summary><ul>${err.details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></details>`);
+      say("Google Maps didn't return any places.", { retry: true, details: err.details || [String(err.message || err)] });
       return;
     }
   }
-  status.textContent = proc.geo.exact ? "" : "Placed by ZIP code; the street address wasn't found.";
+  procStatusLine(proc.sources.partial ? "Some searches didn't answer; the rest are shown." : proc.geo.exact ? "" : "Placed by ZIP code; the street address wasn't found.");
   procDrawSources();
 }
 
+function procClearMap() {
+  proc.pins.forEach((p) => p.setMap(null)); proc.pins = [];
+  proc.map = null;
+}
 function procDrawMap() {
   const box = $("procMap");
   if (!box) return;
-  if (proc.map && proc.map.getContainer() !== box) { proc.map.remove(); proc.map = null; }
-  const home = [proc.geo.lat, proc.geo.lon];
+  if (proc.map && proc.map.getDiv() !== box) procClearMap();
   if (!proc.map) {
-    proc.map = L.map(box, { scrollWheelZoom: false }).setView(home, 11);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(proc.map);
-    proc.layer = L.layerGroup().addTo(proc.map);
+    proc.map = new google.maps.Map(box, { center: { lat: proc.geo.lat, lng: proc.geo.lon }, zoom: 11, mapTypeControl: false, streetViewControl: false, fullscreenControl: true, clickableIcons: false, gestureHandling: "cooperative" });
+    proc.info = new google.maps.InfoWindow();
   }
-  setTimeout(() => proc.map?.invalidateSize(), 0);
 }
-
+const dotIcon = (color, scale = 7, ring = "#FFFFFF", ringW = 2) => ({ path: google.maps.SymbolPath.CIRCLE, scale, fillColor: color, fillOpacity: 1, strokeColor: ring, strokeWeight: ringW });
 function procDrawSources() {
   if (!proc.map) return;
-  const home = [proc.geo.lat, proc.geo.lon], list = procVisible();
-  proc.layer.clearLayers();
-  if (!proc.sources) {   // still searching: just the restaurant
-    L.circleMarker(home, { radius: 11, color: "#B8902C", weight: 4, fillColor: "#163829", fillOpacity: 1 })
-      .bindTooltip(`<strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}`).addTo(proc.layer);
-    proc.map.setView(home, 11);
-    return;
-  }
-  const circle = L.circle(home, { radius: proc.radius * 1609.34, color: "#163829", weight: 1, opacity: 0.4, fill: false, dashArray: "6 6" }).addTo(proc.layer);
+  const home = { lat: proc.geo.lat, lng: proc.geo.lon }, list = procVisible();
+  procClearPins();
+  const ring = new google.maps.Circle({ map: proc.map, center: home, radius: proc.radius * 1609.34, strokeColor: "#163829", strokeOpacity: 0.5, strokeWeight: 1, fillOpacity: 0, clickable: false });
+  proc.pins.push(ring);
   const label = (s) => (s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind);
   for (const s of list) {
-    L.circleMarker([s.lat, s.lon], { radius: 7, color: "#FFFFFF", weight: 2, fillColor: PROC_TYPES[s.type].color, fillOpacity: 1 })
-      .bindPopup(`<strong>${esc(s.name)}</strong><br>${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? `<br>${esc(s.address)}` : ""}${s.hours ? `<br>Hours: ${esc(s.hours)}` : ""}<br><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>`)
-      .addTo(proc.layer);
+    const m = new google.maps.Marker({ map: proc.map, position: { lat: s.lat, lng: s.lon }, title: s.name, icon: dotIcon(PROC_TYPES[s.type].color) });
+    m.addListener("click", () => procOpen(s, m));
+    s.pin = m;
+    proc.pins.push(m);
   }
   // The restaurant goes on last so it's never hidden under a source next door.
-  L.circleMarker(home, { radius: 11, color: "#B8902C", weight: 4, fillColor: "#163829", fillOpacity: 1 })
-    .bindTooltip(`<strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}`, { permanent: false }).addTo(proc.layer);
+  const you = new google.maps.Marker({ map: proc.map, position: home, title: rest.name, icon: dotIcon("#163829", 10, "#B8902C", 4), zIndex: 9999 });
+  you.addListener("click", () => { proc.info.setContent(`<div class="proc-info"><strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}</div>`); proc.info.open({ map: proc.map, anchor: you }); });
+  proc.pins.push(you);
+  if (!proc.sources) { proc.map.setCenter(home); proc.map.setZoom(11); return; }
   const nearby = list.filter((s) => s.miles <= proc.radius);
-  proc.map.fitBounds(nearby.length ? L.latLngBounds([home, ...nearby.map((s) => [s.lat, s.lon])]).pad(0.15) : circle.getBounds(), { maxZoom: 13 });
+  if (nearby.length) {
+    const b = new google.maps.LatLngBounds(); b.extend(home); nearby.forEach((s) => b.extend({ lat: s.lat, lng: s.lon }));
+    proc.map.fitBounds(b, 40);
+  } else proc.map.fitBounds(ring.getBounds(), 20);
   $("procCount").textContent = `${list.length} ${list.length === 1 ? "place" : "places"}`;
-  $("procList").innerHTML = list.length ? `<ul class="proc-list">${list.slice(0, 60).map((s) => `<li>
+  $("procList").innerHTML = list.length ? `<ul class="proc-list">${list.slice(0, 80).map((s) => `<li>
       <span class="proc-dot" style="background:${PROC_TYPES[s.type].color}"></span>
-      <div><button type="button" class="proc-name" data-proc-go="${s.id}">${esc(s.name)}</button>
-      <div class="proc-meta">${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? ` | ${esc(s.address)}` : ""}</div>
-      <div class="proc-links"><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.site ? ` <a href="${esc(s.site)}" target="_blank" rel="noopener">Website</a>` : ""}${s.phone ? ` <a href="tel:${esc(s.phone.replace(/[^\d+]/g, ""))}">${esc(s.phone)}</a>` : ""}</div></div></li>`).join("")}</ul>`
+      <div><button type="button" class="proc-name" data-proc-go="${esc(s.id)}">${esc(s.name)}</button>
+      <div class="proc-meta">${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? ` | ${esc(s.address.replace(/, USA$/, ""))}` : ""}</div>
+      <div class="proc-links"><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.maps ? ` <a href="${esc(s.maps)}" target="_blank" rel="noopener">Hours &amp; phone on Google Maps</a>` : ""}</div></div></li>`).join("")}</ul>`
     : `<p class="ms-empty">No ${proc.cat === "all" ? "" : PROC_CATS.find((c) => c.id === proc.cat).name.toLowerCase() + " "}sources found within ${proc.radius} miles. Try a wider distance.</p>`;
-  // Large distributors: nearest warehouse on the map, or how to reach them.
   $("procChains").innerHTML = `<div class="proc-chains">${CHAINS.map((c) => {
     const near = (proc.sources || []).filter((s) => s.type === "distributor" && c.match.test(s.name)).sort((a, b) => a.miles - b.miles)[0];
     return `<div class="proc-chain"><strong>${c.name}</strong>
-      <span>${near ? `Nearest warehouse: ${esc(near.name)}, ${near.miles.toFixed(0)} mi` : "No warehouse on the map within 100 miles. Most deliver across a region; ask for a sales rep."}</span>
+      <span>${near ? `Nearest location: ${esc(near.name)}, ${near.miles.toFixed(0)} mi` : "No location found within 100 miles. Most deliver across a region; ask for a sales rep."}</span>
       <a href="${c.site}" target="_blank" rel="noopener">Set up an account</a></div>`; }).join("")}</div>`;
 }
+function procClearPins() { proc.pins.forEach((p) => p.setMap(null)); proc.pins = []; }
+function procOpen(s, marker) {
+  const label = s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind;
+  proc.info.setContent(`<div class="proc-info"><strong>${esc(s.name)}</strong><br>${esc(label)} | ${s.miles.toFixed(1)} mi${s.address ? `<br>${esc(s.address.replace(/, USA$/, ""))}` : ""}<br><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.maps ? ` | <a href="${esc(s.maps)}" target="_blank" rel="noopener">Google Maps</a>` : ""}</div>`);
+  proc.info.open({ map: proc.map, anchor: marker });
+}
 function procDirections(s) {
-  return `https://www.google.com/maps/dir/?api=1&origin=${proc.geo.lat},${proc.geo.lon}&destination=${s.lat},${s.lon}`;
+  return `https://www.google.com/maps/dir/?api=1&origin=${proc.geo.lat},${proc.geo.lon}&destination=${encodeURIComponent(s.name)}&destination_place_id=${encodeURIComponent(s.id)}`;
 }
 function procFocus(id) {
   const s = (proc.sources || []).find((x) => x.id === id);
-  if (!s || !proc.map) return;
-  proc.map.setView([s.lat, s.lon], 14);
-  proc.layer.eachLayer((m) => { const ll = m.getLatLng?.(); if (ll && ll.lat === s.lat && ll.lng === s.lon && m.openPopup) m.openPopup(); });
+  if (!s || !proc.map || !s.pin) return;
+  proc.map.setCenter({ lat: s.lat, lng: s.lon }); proc.map.setZoom(14);
+  procOpen(s, s.pin);
   $("procMap").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
@@ -3883,7 +3859,7 @@ function wireControls() {
     if (c) { proc.cat = c.dataset.procCat; renderProcurement(); return; }
     const go = e.target.closest("[data-proc-go]");
     if (go) procFocus(go.dataset.procGo);
-    if (e.target.closest("#procRetry")) { proc.loadingFor = ""; proc.sources = null; procLoad(); }
+    if (e.target.closest("#procRetry")) { proc.loadingFor = ""; proc.sources = null; proc.found = {}; procLoad(); }
   });
   $("page-procurement").addEventListener("change", (e) => {
     if (e.target.id === "procRadius") { proc.radius = Number(e.target.value); renderProcurement(); }

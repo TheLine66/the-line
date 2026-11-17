@@ -216,7 +216,7 @@ This makes sure any email links (for example, password resets) send people to yo
 | **Recipes** | Add a dish, change its price, or add and remove ingredients, then click **Save dish** |
 | **Labor Costs** *(put away for now: set `LABOR_ON = true` near the top of the page list in `app.js` to bring it back)* | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
 | **MOD Report** | The manager on duty fills one in every shift: weather, covers by hour (peak times are highlighted), staffing, employee and guest issues, comps and voids, 86'd items, maintenance, cash and closing checks, tomorrow's forecast, and notes. **Print / save as PDF** makes a clean copy to share. |
-| **Procurement** | A map of where to buy around the restaurant's address (needs the address in Settings): large distributors like Sysco and US Foods, wholesale clubs like Costco, and local farmers markets, farm stands, butchers, seafood and produce shops. Pick an ingredient group (produce, meat, seafood…) to see only the places that sell it; 86'd and spoiling items are flagged. Places come from OpenStreetMap (free, no key), so call ahead before you go. |
+| **Procurement** | A map of where to buy around the restaurant's address (needs the address in Settings): large distributors like Sysco and US Foods, wholesale clubs like Costco, and local farmers markets, farm stands, butchers, seafood and produce shops. Pick an ingredient group (produce, meat, seafood…) to see only the places that sell it; 86'd and spoiling items are flagged. Places come from Google Maps (setup under "Procurement (Google Maps)" below). |
 
 **The what-if bar** (on Cost Tracker and Performance) works like it did in your prototype. You can now also click **Save** to keep a scenario like "Beef +15%", and reload it later from the **Saved scenarios** menu.
 
@@ -273,6 +273,26 @@ Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day
 - **Pictures need billing:** Google's picture model only works once billing is turned on for your key (Google AI Studio → **Billing**). Each picture costs about 4 cents. Until then the button explains this, and **Add your own picture** still works. To pick a specific picture model, add `GEMINI_IMAGE_MODEL`.
 - **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.
 - **Always look it over:** the AI can suggest odd pairings, or ingredients you don't stock (the page flags those).
+
+## Procurement (Google Maps)
+
+The **Procurement** page puts the restaurant on a Google map and searches Google Maps around it for distributors (Sysco, US Foods, Performance Foodservice, Gordon Food Service), wholesale clubs (Costco, Sam's Club, Restaurant Depot, BJ's) and local farmers markets, farm stands, butchers, seafood, produce and cheese shops. It needs the restaurant's address (run `supabase/address.sql`, then fill it in under **Settings**) and one Google Maps key.
+
+### Step A: Get a Google Maps key (once)
+1. Go to **console.cloud.google.com** and sign in. Make a project (top bar → project picker → **New project**, name it "The Line").
+2. **Billing:** left menu → **Billing** → link a billing account. Google asks for a card, but its free monthly allowance covers a class demo, so this should cost $0. You can also set a budget alert there.
+3. **Turn on two APIs:** left menu → **APIs & Services** → **Library**. Search for and **Enable** both **Maps JavaScript API** and **Places API (New)**.
+4. **Make the key:** **APIs & Services** → **Credentials** → **Create credentials** → **API key**. Copy it.
+5. **Lock the key to your site** (it's used in the browser, so this is what keeps others from using it): click the key → **Application restrictions** → **Websites** → add `https://the-line-ten.vercel.app/*` and `https://the-line-git-dev-the-line2.vercel.app/*` (your live site and your dev preview). Under **API restrictions** → **Restrict key** → choose **Maps JavaScript API** and **Places API (New)** → **Save**.
+
+### Step B: Give Vercel the key (once)
+1. **vercel.com** → the **the-line** project → **Settings** → **Environment Variables**.
+2. Add `GOOGLE_MAPS_KEY` with the key as the value, for all environments, and **Save**.
+3. **Deployments** → **⋯** next to the newest one → **Redeploy**.
+
+- **Cost:** each time the page searches a new area it makes 14 small searches. Google's free monthly allowance covers hundreds of those; results are kept while the page is open, so switching tabs doesn't search again.
+- **If it says "Google Maps isn't connected yet":** `GOOGLE_MAPS_KEY` is missing in Vercel, or you haven't redeployed since adding it.
+- **If it says "Google rejected the Maps key":** check Step A, points 3 and 5 (both APIs turned on, and your site's address on the key's list).
 
 ## The Line POS (paid add-on)
 

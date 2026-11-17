@@ -789,7 +789,7 @@ fieldset.addr legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-wei
 .proc-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.25); flex-shrink: 0; }
 .proc-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .proc-grid > .chart-card { margin: 0; }
-#procMap { height: 520px; border-radius: 6px; z-index: 0; }
+#procMap { height: 520px; border-radius: 6px; z-index: 0; background: var(--tint, #EEE); }
 .proc-credit { margin: 8px 0 0; }
 .proc-list-card { max-height: 600px; overflow: auto; }
 .proc-list { list-style: none; margin: 0; padding: 0; }
@@ -803,7 +803,8 @@ fieldset.addr legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-wei
 .proc-chains { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .proc-chain { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid #2B4C7E; border-radius: 6px; font-size: 13.5px; }
 .proc-chain strong { font-size: 15.5px; }
-.leaflet-popup-content { font: 13px/1.45 Verdana, Geneva, sans-serif; }
+.proc-info { font: 13px/1.45 Verdana, Geneva, sans-serif; color: #22231F; max-width: 260px; }
+.proc-info a { color: #1F4D3A; font-weight: 600; }
 @media (max-width: 900px) { .proc-grid { grid-template-columns: 1fr; } #procMap { height: 380px; } .proc-list-card { max-height: none; } }
 .proc-grid { margin-bottom: 18px; }
 .proc-dot.proc-home { width: 14px; height: 14px; background: #163829; border: 3px solid #B8902C; box-shadow: none; vertical-align: -2px; }
