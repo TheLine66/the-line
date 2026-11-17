@@ -8,7 +8,9 @@
 // with Google Search, so team colors, mascots and sayings are real.
 // Other actions: { action: "ideas" } gives 3 menu ideas to choose from,
 // { action: "image" } draws a banner picture, and { action: "invoice" }
-// reads a photo of a supplier invoice into ingredient lines.
+// reads a photo of a supplier invoice into ingredient lines, and
+// { action: "menu" } reads photos of a restaurant's printed menu into
+// dishes with the ingredients each one probably uses.
 //
 // Needs three environment variables in Vercel (Settings → Environment
 // Variables): GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY. Optional:
@@ -52,6 +54,10 @@ module.exports = async function handler(req, res) {
   if (body.action === "invoice") {
     if (size > MAX_INVOICE) return res.status(413).json({ error: "That picture is too big. Try a closer, smaller photo." });
     return readInvoice(body, key, res);
+  }
+  if (body.action === "menu") {
+    if (size > MAX_INVOICE) return res.status(413).json({ error: "Those pictures are too big. Try fewer pages, or closer photos." });
+    return readMenu(body, key, res, started);
   }
   if (size > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
   if (body.action === "image") return makeImage(body, key, res);
@@ -235,6 +241,66 @@ Also give the supplier's name and the invoice date (YYYY-MM-DD) if they're print
     if (!inv || !Array.isArray(inv.items) || !inv.items.length) return res.status(422).json({ error: "No product lines found. Try a clearer, straight-on photo of the whole invoice." });
     return res.status(200).json({ model, invoice: inv });
   } catch {
+    return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
+  }
+}
+
+// ---------------------------------------------------------------- menus
+// Reads photos (or a PDF) of a restaurant's current menu into dishes, and
+// works out the ingredients each dish most likely uses from its name and
+// description. Menus that only print "Burger $14" can't say much, so each
+// dish says how sure Gemini is, and the app marks the thin ones for the
+// owner to fill in by hand.
+async function readMenu(b, key, res, started) {
+  const pages = (Array.isArray(b.pages) ? b.pages : []).slice(0, 6);
+  if (!pages.length || pages.some((p) => !/^(image\/(jpeg|png|webp|heic|heif)|application\/pdf)$/.test(String(p?.mime || "")) || typeof p.data !== "string" || !p.data)) {
+    return res.status(400).json({ error: "Send photos (JPG or PNG) or a PDF of the menu." });
+  }
+  const ours = (Array.isArray(b.ingredients) ? b.ingredients : []).slice(0, 400)
+    .map((i) => `- ${clip(i.name, 100)} (${clip(i.unit, 20)})`).join("\n");
+  const prompt = `${pages.length > 1 ? `These ${pages.length} pictures are pages of one restaurant menu.` : "This is a restaurant's menu."}
+Read every dish and drink that has its own price. Skip section headings, add-ons and "add chicken +$4" style extras, and notes like "ask about allergies".
+
+Our ingredient list so far (name, the unit we cost it in):
+${ours || "- (empty)"}
+
+For each dish:
+- "name": the dish name as printed (fix ALL CAPS into normal Title Case).
+- "category": the menu section it sits under (e.g. Starters, Salads, Mains, Desserts, Cocktails). Empty if there are no sections.
+- "price": the menu price in dollars. If it has two sizes, use the regular or larger one. 0 if no price is printed.
+- "description": the description printed under it, word for word, or empty.
+- "ingredients": what goes into ONE plate (or one drink). Use what the name and description say first. Then add the obvious parts a cook would need even if not printed (a burger needs a bun and a beef patty; fries need potatoes and fryer oil is not counted). Do NOT invent garnishes or secret sauces the menu doesn't hint at. Skip salt, pepper, water and cooking oil.
+  For each ingredient:
+  - "name": a short, plain ingredient name a supplier would sell ("Ribeye steak", "Romaine", "Parmesan", "Brioche bun"). If it is the same thing as one on our list, set "existing" to that exact name from our list and use it as "name" too. Otherwise leave "existing" empty. Use the SAME name every time the same ingredient appears in different dishes.
+  - "unit": if it matches one of ours, OUR unit. Otherwise oz for most foods, fl oz for liquids, each for things counted whole (eggs, buns, tortillas, lemons).
+  - "qty": a normal restaurant portion of it for one plate, in that unit (a steak 12 oz, a burger patty 6 oz, a bun 1 each, cheese on a sandwich 1 oz, a cocktail's spirit 2 fl oz).
+  - "unit_cost": a typical US wholesale price for ONE of that unit, in dollars (what a restaurant pays a distributor, not a grocery store).
+- "detail": "full" if the menu describes the dish well enough to know its main ingredients, "partial" if you could only guess some of them, "none" if the name alone tells you almost nothing (e.g. "The Chef's Plate", "Grandma's Special"). For "none", give whatever you reasonably can, even an empty list.
+
+Also give the restaurant's name if it's printed.`;
+  const parts = pages.map((p) => ({ inlineData: { mimeType: p.mime, data: p.data } }));
+  parts.push({ text: prompt });
+  const payload = {
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: MENU_SCAN_SCHEMA },
+  };
+  try {
+    const model = await pickModel(key);
+    const r = await callGemini(model, payload, key, Math.max(10000, 57000 - (Date.now() - started)));
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.error?.message || "");
+      if (r.status === 429) return res.status(429).json({ error: "Gemini is busy or out of quota. Try again in a minute." });
+      if (r.status === 403 || /api key/i.test(msg)) return res.status(502).json({ error: "Gemini didn't accept the API key. Check GEMINI_API_KEY in Vercel's settings." });
+      return res.status(502).json({ error: msg || `Gemini returned an error (${r.status}).` });
+    }
+    const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    let menu;
+    try { menu = JSON.parse(text); } catch { return res.status(502).json({ error: "Couldn't read that menu. Try clearer, straight-on photos, or fewer pages at a time." }); }
+    if (!menu || !Array.isArray(menu.dishes) || !menu.dishes.length) return res.status(422).json({ error: "No dishes found. Try a clearer, straight-on photo of the menu." });
+    return res.status(200).json({ model, menu });
+  } catch (e) {
+    if (e?.name === "AbortError") return res.status(504).json({ error: "That menu took too long to read. Try scanning a page or two at a time." });
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
   }
 }
@@ -463,6 +529,42 @@ const IDEAS_SCHEMA = {
     },
   },
   required: ["ideas"],
+};
+
+const MENU_SCAN_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    restaurant: { type: "STRING", description: "The restaurant's name if printed, else empty" },
+    dishes: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING" },
+          category: { type: "STRING" },
+          price: { type: "NUMBER" },
+          description: { type: "STRING" },
+          detail: { type: "STRING", enum: ["full", "partial", "none"] },
+          ingredients: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                existing: { type: "STRING", description: "Exact name from our ingredient list, or empty" },
+                unit: { type: "STRING" },
+                qty: { type: "NUMBER" },
+                unit_cost: { type: "NUMBER" },
+              },
+              required: ["name", "unit", "qty", "unit_cost"],
+            },
+          },
+        },
+        required: ["name", "price", "detail", "ingredients"],
+      },
+    },
+  },
+  required: ["dishes"],
 };
 
 const INVOICE_SCHEMA = {

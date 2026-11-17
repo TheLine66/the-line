@@ -284,6 +284,7 @@ async function selectRestaurant(id) {
   editingReportId = null; modDraft = null; modDirty = false;
   laborWeek = null; laborRaise = { dept: "all", pct: 0 };
   lastMenu = null;
+  menuDraft = null;
   await loadRestaurantData();
   renderRestaurantSelect();
   const opening = $("appScreen").classList.contains("hidden");
@@ -1479,6 +1480,216 @@ async function saveInvoice() {
   } catch { btn.disabled = false; }
 }
 
+// ---------------------------------------------------------- Menu scanning
+// Photos of the restaurant's current menu → Gemini reads the dishes and
+// guesses each one's ingredients → the owner checks dishes, prices and the
+// new ingredients (with estimated costs) → dishes, ingredients and recipe
+// lines are saved. Menus that say little ("The Chef's Plate") come back
+// thin, so those dishes are marked "Needs ingredients" / "Check ingredients"
+// in the Recipes list until someone fills them in.
+let menuDraft = null;   // { dishes: [{ use, name, category, price, desc, detail, dup, items: [{ key, qty }] }], ings: Map(key -> { use, name, unit, cost, mine }) }
+const MENU_MAX_PAGES = 6;
+const ingKey = (n) => String(n || "").trim().toLowerCase().replace(/\s+/g, " ");
+const ingByName = (n) => [...ingredients.values()].find((i) => ingKey(i.name) === ingKey(n)) || null;
+
+// Dishes the menu scan could only half work out. Kept on this device until
+// the dish is saved again in the editor; dishes with no ingredients at all
+// are marked from the data itself, so that part shows everywhere.
+const CHECK_KEY = () => `line.checkIngredients.${rest?.id}`;
+function checkSet() { try { return new Set(JSON.parse(safeGet(CHECK_KEY()) || "[]")); } catch { return new Set(); } }
+function setCheck(ids, on) {
+  const set = checkSet();
+  ids.forEach((id) => (on ? set.add(id) : set.delete(id)));
+  safeSet(CHECK_KEY(), JSON.stringify([...set].filter((id) => dishes.some((d) => d.id === id) || ids.includes(id))));
+}
+function dishFlag(d) {
+  if (!d.items.length) return `<span class="flag-need">Needs ingredients</span>`;
+  if (checkSet().has(d.id)) return `<span class="flag-check">Check ingredients</span>`;
+  return "";
+}
+
+async function scanMenu(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const pdfs = files.filter((f) => f.type === "application/pdf");
+  if (files.some((f) => f.type !== "application/pdf" && !/^image\//.test(f.type))) { toast("Pick photos or a PDF of the menu.", "err"); return; }
+  if (pdfs.length && files.length > 1) { toast("Send one PDF on its own, or photos of each page.", "err"); return; }
+  if (pdfs.length && pdfs[0].size > 3 * 1024 * 1024) { toast("That PDF is too big. Try photos of the pages instead.", "err"); return; }
+  if (files.length > MENU_MAX_PAGES) { toast(`Up to ${MENU_MAX_PAGES} pages at a time. Scan the rest after.`, "err"); return; }
+  if (menuDraft && !confirm("Throw away the menu you haven't added yet and scan this one?")) { $("menuScanFile").value = ""; return; }
+  const note = $("menuScanNote");
+  note.textContent = `Gemini is reading ${files.length > 1 ? `${files.length} pages` : "the menu"} and working out the ingredients. This takes 20 to 50 seconds…`;
+  $("menuScanBtn").classList.add("disabled"); $("menuScanBlade").classList.remove("hidden");
+  try {
+    const pages = [];
+    for (const f of files) pages.push(f.type === "application/pdf" ? { mime: "application/pdf", data: await fileB64(f) } : { mime: "image/jpeg", data: await shrinkImage(f, files.length > 3 ? 1400 : 1700) });
+    if (pages.reduce((n, p) => n + p.data.length, 0) > 4000000) { note.textContent = ""; toast("Those pictures are too big together. Scan fewer pages at a time.", "err"); return; }
+    const { data: sess } = await sb.auth.getSession();
+    const r = await fetch("/api/specials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sess.session?.access_token || ""}` },
+      body: JSON.stringify({ action: "menu", pages, ingredients: [...ingredients.values()].map((i) => ({ name: i.name, unit: i.unit })) }),
+    });
+    const out = await r.json().catch(() => ({}));
+    note.textContent = "";
+    if (r.status === 503 || r.status === 404) { toast("The Gemini helper isn't connected yet. See the README's Specials section.", "err"); return; }
+    if (!r.ok) { toast(out.error || "Couldn't read that menu. Try again.", "err"); return; }
+    menuDraft = buildMenuDraft(out.menu);
+    renderMenuScan();
+    $("menuScanCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch { note.textContent = ""; toast("Couldn't read that file. Try another photo.", "err"); }
+  finally { $("menuScanBtn").classList.remove("disabled"); $("menuScanBlade").classList.add("hidden"); $("menuScanFile").value = ""; }
+}
+
+function buildMenuDraft(menu) {
+  const ings = new Map(), names = new Set(dishes.map((d) => ingKey(d.name)));
+  const draftDishes = [];
+  for (const x of menu.dishes || []) {
+    const name = String(x.name || "").trim().slice(0, 100);
+    if (!name || draftDishes.some((d) => ingKey(d.name) === ingKey(name))) continue;
+    const items = [];
+    for (const g of x.ingredients || []) {
+      const mine = ingByName(g.existing) || ingByName(g.name);
+      const label = mine ? mine.name : String(g.name || "").trim().slice(0, 100);
+      if (!label) continue;
+      const key = ingKey(label);
+      if (!ings.has(key)) {
+        ings.set(key, mine
+          ? { use: true, name: mine.name, unit: mine.unit, cost: mine.cost, mine: true }
+          : { use: true, name: label, unit: String(g.unit || "oz").trim().slice(0, 20) || "oz", cost: Math.max(0, Math.round((Number(g.unit_cost) || 0) * 100) / 100), mine: false });
+      }
+      const q = Number(g.qty) > 0 ? Math.round(Number(g.qty) * 100) / 100 : 1;
+      const same = items.find((it) => it.key === key);
+      if (same) same.qty += q; else items.push({ key, qty: q });
+    }
+    const dup = names.has(ingKey(name));
+    draftDishes.push({ use: !dup, dup, name, category: String(x.category || "").trim().slice(0, 40), price: Number(x.price) > 0 ? Number(x.price) : "",
+      desc: String(x.description || "").trim(), detail: items.length ? (["full", "partial", "none"].includes(x.detail) ? x.detail : "partial") : "none", items });
+  }
+  return { dishes: draftDishes, ings };
+}
+
+const menuItemsOf = (d) => d.items.filter((it) => menuDraft.ings.get(it.key)?.use);
+
+function renderMenuScan() {
+  const el = $("menuScanResult");
+  if (!menuDraft) { el.innerHTML = ""; return; }
+  const v = menuDraft;
+  const used = v.dishes.filter((d) => d.use);
+  const thin = used.filter((d) => d.detail !== "full" || !menuItemsOf(d).length).length;
+  const newIngs = [...v.ings.entries()].filter(([, g]) => !g.mine);
+  const mineIngs = [...v.ings.values()].filter((g) => g.mine).length;
+  const useNew = newIngs.filter(([, g]) => g.use).length;
+  const noPrice = used.filter((d) => !(Number(d.price) > 0)).length;
+  const flag = (d) => {
+    if (d.dup) return `<span class="flag-dup">Already on your menu</span>`;
+    if (!menuItemsOf(d).length || d.detail === "none") return `<span class="flag-need">Needs ingredients</span>`;
+    if (d.detail === "partial") return `<span class="flag-check">Check ingredients</span>`;
+    return "";
+  };
+  el.innerHTML = `
+    <div class="inv-head"><strong>${v.dishes.length} dish${v.dishes.length === 1 ? "" : "es"}</strong> read, using <strong>${v.ings.size} ingredient${v.ings.size === 1 ? "" : "s"}</strong>${mineIngs ? ` (${mineIngs} you already have)` : ""}.
+      ${thin ? `${thin} dish${thin === 1 ? " doesn't" : "es don't"} say enough on the menu, so you'll fill ${thin === 1 ? "it" : "them"} in by hand after.` : ""} Check the prices, then add.</div>
+
+    <div class="section-label">1. Dishes</div>
+    <div class="scroll-x"><table class="edit inv-table menu-scan-table">
+      <thead><tr><th></th><th>Dish</th><th>Category</th><th class="num">Price ($)</th><th>Ingredients we think it uses</th><th></th></tr></thead>
+      <tbody>${v.dishes.map((d, i) => {
+        const its = menuItemsOf(d);
+        return `<tr class="${d.use ? "" : "skip"} ${d.use && !(Number(d.price) > 0) ? "low" : ""}">
+        <td><input type="checkbox" data-md="${i}" data-k="use" ${d.use ? "checked" : ""} aria-label="Include ${esc(d.name)}"></td>
+        <td style="min-width:180px"><input data-md="${i}" data-k="name" value="${esc(d.name)}" maxlength="100" aria-label="Dish name">${d.desc ? `<div class="ms-desc">${esc(d.desc)}</div>` : ""}</td>
+        <td style="width:140px"><input data-md="${i}" data-k="category" value="${esc(d.category)}" maxlength="40" aria-label="Category"></td>
+        <td class="num" style="width:110px"><input class="num mono" type="number" min="0.01" step="0.01" data-md="${i}" data-k="price" value="${d.price === "" ? "" : Number(d.price).toFixed(2)}" placeholder="0.00" aria-label="Menu price"></td>
+        <td class="ms-ings">${its.length ? its.map((it) => { const g = v.ings.get(it.key); return `${esc(g.name)} <span class="ms-qty">${trimNum(it.qty)} ${esc(g.unit)}</span>`; }).join(", ") : `<span class="muted">None yet</span>`}</td>
+        <td class="inv-tag">${flag(d)}</td>
+      </tr>`; }).join("")}</tbody>
+    </table></div>
+
+    ${newIngs.length ? `<div class="section-label">2. New ingredients <span class="muted">(costs are Gemini's estimates; scan an invoice later for real prices)</span></div>
+    <div class="scroll-x"><table class="edit inv-table">
+      <thead><tr><th></th><th>Ingredient</th><th>Unit</th><th class="num">Est. cost per unit ($)</th><th class="num">Used in</th></tr></thead>
+      <tbody>${newIngs.map(([key, g]) => {
+        const n = v.dishes.filter((d) => d.use && d.items.some((it) => it.key === key)).length;
+        return `<tr class="${g.use ? "" : "skip"}">
+        <td><input type="checkbox" data-mi="${esc(key)}" data-k="use" ${g.use ? "checked" : ""} aria-label="Include ${esc(g.name)}"></td>
+        <td><input data-mi="${esc(key)}" data-k="name" value="${esc(g.name)}" maxlength="100" aria-label="Ingredient"></td>
+        <td style="width:90px"><input data-mi="${esc(key)}" data-k="unit" value="${esc(g.unit)}" list="unitList" maxlength="20" aria-label="Unit"></td>
+        <td class="num" style="width:150px"><input class="num mono" type="number" min="0" step="0.01" data-mi="${esc(key)}" data-k="cost" value="${trimNum(g.cost)}" aria-label="Cost per unit"></td>
+        <td class="num mono" style="width:90px">${n} dish${n === 1 ? "" : "es"}</td>
+      </tr>`; }).join("")}</tbody>
+    </table></div>` : ""}
+
+    <div class="row-actions">
+      <button class="applybtn" id="menuScanSave" type="button" ${used.length ? "" : "disabled"}>Add ${used.length} dish${used.length === 1 ? "" : "es"}${useNew ? ` and ${useNew} ingredient${useNew === 1 ? "" : "s"}` : ""}</button>
+      <button class="ghostbtn dark" id="menuScanCancel" type="button">Cancel</button>
+      <span class="note">${noPrice ? `${noPrice} dish${noPrice === 1 ? " needs" : "es need"} a price before adding. ` : ""}Amounts per plate are guesses; open each dish below to fine-tune.</span>
+    </div>`;
+}
+
+async function saveMenuScan() {
+  const v = menuDraft;
+  const picked = v.dishes.filter((d) => d.use);
+  for (const d of picked) {
+    d.name = String(d.name).trim();
+    if (!d.name) { toast("Every dish you add needs a name.", "err"); return; }
+    if (!(Number(d.price) > 0)) { toast(`Give ${d.name} a menu price, or untick it.`, "err"); return; }
+    if (dishes.some((x) => ingKey(x.name) === ingKey(d.name))) { toast(`${d.name} is already on your menu. Rename it or untick it.`, "err"); return; }
+  }
+  if (new Set(picked.map((d) => ingKey(d.name))).size !== picked.length) { toast("Two dishes have the same name. Rename one.", "err"); return; }
+  const wanted = new Set(picked.flatMap((d) => menuItemsOf(d).map((it) => it.key)));
+  const newOnes = [...v.ings.entries()].filter(([k, g]) => !g.mine && g.use && wanted.has(k));
+  for (const [, g] of newOnes) {
+    g.name = String(g.name).trim(); g.unit = String(g.unit).trim();
+    if (!g.name || !g.unit || !(Number(g.cost) >= 0) || g.cost === "") { toast("Every new ingredient needs a name, a unit and a cost of 0 or more.", "err"); return; }
+  }
+  const btn = $("menuScanSave"); btn.disabled = true;
+  $("menuScanNote").textContent = "Adding your menu…";
+  try {
+    // 1. Ingredients: reuse any that already exist under the (possibly edited) name.
+    const idByKey = new Map();
+    for (const [k, g] of v.ings) { const mine = ingByName(g.name); if (mine) idByKey.set(k, mine.id); }
+    const toInsert = [], seen = new Map();
+    for (const [k, g] of newOnes) {
+      if (idByKey.has(k)) continue;
+      const nk = ingKey(g.name);
+      if (seen.has(nk)) { seen.get(nk).push(k); continue; }
+      seen.set(nk, [k]);
+      toInsert.push({ restaurant_id: rest.id, name: g.name, unit: g.unit, cost: Number(g.cost) });
+    }
+    let added = 0;
+    if (toInsert.length) {
+      const rows = await run(sb.from("ingredients").insert(toInsert).select("id,name"));
+      for (const r of rows) for (const k of seen.get(ingKey(r.name)) || []) idByKey.set(k, r.id);
+      added = rows.length;
+    }
+    // 2. Dishes, after the ones already on the menu.
+    let sort = dishes.reduce((m, d) => Math.max(m, d.sort_order || 0), -1) + 1;
+    const dishRows = await run(sb.from("dishes").insert(picked.map((d) => ({
+      restaurant_id: rest.id, name: d.name, category: String(d.category || "").trim(), price: Math.round(Number(d.price) * 100) / 100, sort_order: sort++,
+    }))).select("id,name"));
+    const dishId = new Map(dishRows.map((r) => [ingKey(r.name), r.id]));
+    // 3. Recipe lines (one per ingredient per dish).
+    const lines = [];
+    for (const d of picked) {
+      const per = new Map();
+      for (const it of menuItemsOf(d)) { const id = idByKey.get(it.key); if (id) per.set(id, (per.get(id) || 0) + (Number(it.qty) > 0 ? Number(it.qty) : 1)); }
+      for (const [ingredient_id, qty] of per) lines.push({ restaurant_id: rest.id, dish_id: dishId.get(ingKey(d.name)), ingredient_id, qty: Math.round(qty * 1000) / 1000 });
+    }
+    if (lines.length) await run(sb.from("dish_items").insert(lines));
+    const partial = picked.filter((d) => d.detail !== "full" && menuItemsOf(d).length).map((d) => dishId.get(ingKey(d.name)));
+    await loadRestaurantData();
+    setCheck(partial, true);
+    const thinOnes = picked.filter((d) => d.detail !== "full" || !menuItemsOf(d).length), thin = thinOnes.length, firstThin = thinOnes[0];
+    menuDraft = null;
+    draftDirty = false;
+    startEditing(firstThin ? dishId.get(ingKey(firstThin.name)) : dishRows[0].id);
+    render();
+    toast(`From the menu: ${picked.length} dish${picked.length === 1 ? "" : "es"} and ${added} new ingredient${added === 1 ? "" : "s"} added.${thin ? ` ${thin} need${thin === 1 ? "s" : ""} ingredients checked.` : ""}`);
+  } catch { if (document.body.contains(btn)) btn.disabled = false; }
+  finally { $("menuScanNote").textContent = ""; }
+}
+
 async function addIngredient(e) {
   e.preventDefault();
   const name = $("newIngName").value.trim(), unit = $("newIngUnit").value.trim(), cost = Number($("newIngCost").value);
@@ -1542,16 +1753,17 @@ function renderRecipes() {
   $("recipeList").innerHTML = (editingDishId === "new"
     ? `<button type="button" class="dish-row selected"><span class="info"><span class="name">${esc(draft.name) || "New dish"}</span><span class="cat">Not saved yet</span></span></button>` : "") +
     dishes.map((d) => `<button type="button" class="dish-row ${d.id === editingDishId ? "selected" : ""}" data-recipe="${d.id}">
-        <span class="info"><span class="name">${esc(d.name)}</span></span>
+        <span class="info"><span class="name">${esc(d.name)}</span>${dishFlag(d) ? `<span class="cat">${dishFlag(d)}</span>` : ""}</span>
       </button>`).join("");
   renderRecipeEditor();
+  renderMenuScan();
 }
 
 function renderRecipeEditor() {
   const el = $("recipeEditor");
   if (!ingredients.size) {
     el.className = "panel empty";
-    el.innerHTML = `<h2>Add ingredients first</h2><p>A recipe is a list of ingredients with amounts. Add a few ingredients and their prices, then come back.</p>
+    el.innerHTML = `<h2>Add ingredients first</h2><p>A recipe is a list of ingredients with amounts. Scan your menu above and the ingredients are added for you, or add a few ingredients and their prices by hand.</p>
       <button class="applybtn" data-goto="ingredients" type="button">Go to Ingredients</button>`;
     return;
   }
@@ -1652,6 +1864,7 @@ async function saveDish() {
     if (items.length) {
       await run(sb.from("dish_items").insert(items.map((it) => ({ restaurant_id: rest.id, dish_id: id, ...it }))));
     }
+    setCheck([id], false);
     await loadRestaurantData();
     draftDirty = false;
     startEditing(id);
@@ -3237,14 +3450,26 @@ async function deleteScenario() {
 function openOnboarding(canCancel) {
   $("onboardName").value = "";
   const sel = $("onboardSeed");
-  sel.innerHTML = `<option value="">Blank: I'll add my own menu</option>` +
+  sel.innerHTML = `<option value="">Blank: I'll add my own menu</option><option value="${SCAN_SEED}">Scan my current menu</option>` +
     Object.entries(window.SEEDS || {}).map(([k, v]) => `<option value="${k}">Sample: ${esc(v.label)}</option>`).join("");
   sel.value = "";
+  $("onboardMenuFile").value = "";
+  syncOnboardScan();
   $("onboardMsg").textContent = "";
   $("onboardMsg").className = "form-msg";
   $("onboardCancel").classList.toggle("hidden", !canCancel);
   show("onboardScreen");
   $("onboardName").focus();
+}
+
+const SCAN_SEED = "__scan";
+function syncOnboardScan() {
+  const scan = $("onboardSeed").value === SCAN_SEED;
+  $("onboardMenuField").classList.toggle("hidden", !scan);
+  $("onboardMenuFile").required = scan;
+  $("onboardSeedNote").textContent = scan
+    ? "Snap each page of your menu (up to 6) or pick a PDF. You'll check the dishes and ingredients before anything saves."
+    : "Sample menus are made-up data you can edit or delete anytime.";
 }
 
 async function createRestaurant(e) {
@@ -3257,7 +3482,10 @@ async function createRestaurant(e) {
   msg.textContent = "Creating your restaurant…";
   let created = null;
   try {
-    const seedKey = $("onboardSeed").value;
+    const choice = $("onboardSeed").value, scan = choice === SCAN_SEED;
+    const menuFiles = scan ? [...$("onboardMenuFile").files] : [];
+    if (scan && !menuFiles.length) { msg.className = "form-msg"; msg.textContent = "Pick photos or a PDF of your menu."; return; }
+    const seedKey = scan ? "" : choice;
     const t = window.SEEDS?.[seedKey]?.targets;
     const row = t ? { name, target_low: t.low, target_mid: t.mid, target_high: t.high } : { name };
     created = await run(sb.from("restaurants").insert(row).select("*").single());
@@ -3267,6 +3495,7 @@ async function createRestaurant(e) {
     }
     await loadRestaurants(created.id);
     toast(`Welcome to ${created.name}!`);
+    if (scan) { menuDraft = null; activePage = "recipes"; render(); scanMenu(menuFiles); }
   } catch (err) {
     msg.className = "form-msg";
     msg.textContent = friendlyError(err);
@@ -3450,6 +3679,7 @@ function wireControls() {
   $("authForm").addEventListener("submit", submitAuth);
   $("authToggle").addEventListener("click", () => setAuthMode(authMode === "signin" ? "signup" : "signin"));
   $("onboardForm").addEventListener("submit", createRestaurant);
+  $("onboardSeed").addEventListener("change", syncOnboardScan);
   $("onboardCancel").addEventListener("click", () => { renderRestaurantSelect(); show("appScreen"); });
   $("onboardSignOut").addEventListener("click", signOut);
   $("onboardDeleteAccount").addEventListener("click", deleteAccount);
@@ -3585,6 +3815,27 @@ function wireControls() {
   $("ingTable").addEventListener("click", (e) => {
     const b = e.target.closest("[data-del-ing]");
     if (b) deleteIngredient(b.dataset.delIng);
+  });
+
+  // Menu scan (Recipes)
+  $("menuScanFile").addEventListener("change", (e) => scanMenu(e.target.files));
+  $("menuScanResult").addEventListener("input", (e) => {
+    const t = e.target; if (!menuDraft) return;
+    const val = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.md !== undefined) menuDraft.dishes[+t.dataset.md][t.dataset.k] = val;
+    else if (t.dataset.mi !== undefined) { const g = menuDraft.ings.get(t.dataset.mi); if (g) g[t.dataset.k] = val; }
+    else return;
+    // Redraw when it changes what's shown elsewhere; keep the cursor where it was.
+    if (t.type === "checkbox" || t.dataset.k === "price" || (t.dataset.mi !== undefined && (t.dataset.k === "name" || t.dataset.k === "unit"))) {
+      const sel = t.type === "checkbox" ? null : t.selectionStart, attr = t.dataset.md !== undefined ? `[data-md="${t.dataset.md}"]` : `[data-mi="${CSS.escape(t.dataset.mi)}"]`;
+      renderMenuScan();
+      const again = document.querySelector(`#menuScanResult ${attr}[data-k="${t.dataset.k}"]`);
+      if (again && sel !== null) { again.focus(); try { again.setSelectionRange(sel, sel); } catch { /* number inputs */ } }
+    }
+  });
+  $("menuScanResult").addEventListener("click", (e) => {
+    if (e.target.closest("#menuScanSave")) saveMenuScan();
+    else if (e.target.closest("#menuScanCancel")) { menuDraft = null; renderMenuScan(); }
   });
 
   // Recipes
