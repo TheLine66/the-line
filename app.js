@@ -1035,12 +1035,12 @@ const PLACE_SEARCHES = [
 ];
 // Ingredient groups: the words that put an ingredient in a group, and where to buy that group.
 const PROC_CATS = [
-  { id: "seafood", name: "Seafood", words: /\b(cod|fish|salmon|shrimp|prawn|crab|lobster|oyster|clam|mussel|scallop|tuna|tilapia|haddock|halibut|catfish|trout)\b/i, from: ["seafood", "wholesale", "distributor"] },
-  { id: "meat", name: "Meat", words: /\b(beef|chuck|brisket|steak|lamb|pork|bacon|rasher|banger|sausage|ham|chicken|wing|turkey|duck|veal|shank|rib|mince|corned)\b/i, from: ["butcher", "farm", "wholesale", "distributor"] },
-  { id: "dairy", name: "Dairy & eggs", words: /\b(cheese|cheddar|swiss|brie|mozzarella|parmesan|cream|milk|butter|yogurt|egg|eggs|ice cream)\b/i, from: ["cheese", "farm", "market", "wholesale", "distributor"] },
+  { id: "seafood", name: "Seafood", words: /\b(cod|fish|salmon|shrimp|prawns?|crab|lobster|oysters?|clams?|mussels?|scallops?|tuna|tilapia|haddock|halibut|catfish|trout|swordfish|mahi|snapper|grouper|branzino|octopus|calamari|squid|anchov(y|ies)|sardines?|caviar|roe)\b/i, from: ["seafood", "wholesale", "distributor"] },
+  { id: "meat", name: "Meat", words: /\b(beef|chuck|brisket|steak|sirloin|ribeye|rib-eye|filet|fillet mignon|mignon|tenderloin|strip|wagyu|patty|patties|burger|lamb|pork|bacon|rasher|banger|sausage|ham|prosciutto|pancetta|salami|pepperoni|chorizo|capicola|mortadella|guanciale|chicken|wing|wings|thigh|breast|cutlet|turkey|duck|veal|venison|bison|goat|oxtail|marrow|shank|ribs?|mince|corned|meatballs?|short rib)\b/i, from: ["butcher", "farm", "wholesale", "distributor"] },
+  { id: "dairy", name: "Dairy & eggs", words: /\b(cheese|cheddar|swiss|brie|mozzarella|parmesan|parmigiano|grana|padano|pecorino|romano|ricotta|burrata|gouda|feta|gruyere|provolone|mascarpone|fontina|havarti|manchego|gorgonzola|camembert|halloumi|cream|milk|butter|buttermilk|yogurt|yoghurt|egg|eggs|ice cream|gelato|creme fraiche)\b/i, from: ["cheese", "farm", "market", "wholesale", "distributor"] },
   { id: "bar", name: "Beer, wine & spirits", words: /\b(stout|beer|ale|lager|wine|whiskey|whisky|vodka|gin|rum|tequila|bourbon|cider)\b/i, from: ["distributor"] },
-  { id: "produce", name: "Produce", words: /\b(lettuce|tomato|onion|onions|potato|potatoes|leek|leeks|celery|chive|chives|lemon|lime|herb|herbs|parsley|vegetable|root|pepper|garlic|carrot|apple|berry|berries|mushroom|cabbage|fruit|greens|spinach|kale|cucumber|peas|corn|squash|avocado|yukon)\b/i, from: ["market", "farm", "greengrocer", "wholesale", "distributor"] },
-  { id: "bakery", name: "Bread & bakery", words: /\b(bread|bun|buns|roll|rolls|rye|pretzel|sponge|cake|tortilla|bagel|brioche|baguette)\b/i, from: ["market", "wholesale", "distributor"] },
+  { id: "produce", name: "Produce", words: /\b(lettuce|romaine|arugula|spinach|kale|greens|tomato|tomatoes|onion|onions|shallots?|scallions?|potato|potatoes|yukon|leek|leeks|celery|chive|chives|lemon|lemons|lime|limes|orange|herb|herbs|parsley|basil|cilantro|mint|thyme|rosemary|dill|vegetable|vegetables|root|peppers?|jalapenos?|garlic|carrots?|apples?|berry|berries|strawberr(y|ies)|mushrooms?|cabbage|fruit|cucumbers?|peas|corn|squash|zucchini|eggplant|avocados?|broccoli|cauliflower|asparagus|beets?|radish|fennel|ginger|bananas?|grapes?|peach|peaches|pears?|melon)\b/i, from: ["market", "farm", "greengrocer", "wholesale", "distributor"] },
+  { id: "bakery", name: "Bread & bakery", words: /\b(bread|bun|buns|roll|rolls|rye|pretzel|sponge|cake|tortillas?|bagels?|brioche|baguettes?|dough|crust|pita|naan|focaccia|ciabatta|croissants?|sourdough|flatbread|english muffins?|muffins?|biscuits?|pastry)\b/i, from: ["market", "wholesale", "distributor"] },
   { id: "pantry", name: "Pantry & dry goods", words: /./, from: ["wholesale", "distributor"] },
 ];
 const CHAINS = [
@@ -1131,7 +1131,8 @@ async function findSources(home, miles) {
   const fields = ["id", "displayName", "location", "formattedAddress", "googleMapsURI", "businessStatus"];
   const runs = await Promise.allSettled(PLACE_SEARCHES.map(async (s) => {
     const { places } = await Place.searchByText({ textQuery: s.q, fields, locationRestriction: boundsAround(home, s.far ? 100 : miles), maxResultCount: 20 });
-    return (places || []).filter((p) => p.businessStatus !== "CLOSED_PERMANENTLY" && (!s.brand || s.brand.test(p.displayName || "")))
+    return (places || []).filter((p) => p.businessStatus !== "CLOSED_PERMANENTLY" && (!s.brand || s.brand.test(p.displayName || ""))
+        && !(s.type === "distributor" && /\b(truck|entrance|enter|exit|gate|parking|dock|lot)\b/i.test(p.displayName || "")))   // a warehouse's gate or lot, not the business
       .map((p) => {
         const lat = typeof p.location.lat === "function" ? p.location.lat() : p.location.lat, lon = typeof p.location.lng === "function" ? p.location.lng() : p.location.lng;
         // A distributor's walk-in store (like a Gordon Food Service Store) is a wholesale stop, not delivery.
@@ -1614,26 +1615,41 @@ async function estimatePrices(auto = false) {
   if (priceBook.estimating || priceBook.ready !== true) return;
   const use = weeklyUse(), fresh = (p) => p.source === "estimate" && daysLeft(addDays(p.observed_on, PLAN.estimateDays)) >= 0;
   const need = [...ingredients.values()].filter((i) => (use.get(i.id) || 0) > 0 && !priceBook.points.some((p) => p.ingredient_id === i.id && fresh(p)))
-    .sort((a, b) => use.get(b.id) * b.cost - use.get(a.id) * a.cost).slice(0, 25);
+    .sort((a, b) => use.get(b.id) * b.cost - use.get(a.id) * a.cost).slice(0, 24);
   if (!need.length) { if (!auto) { priceBook.msg = "Every ingredient you use already has a recent estimate."; renderPricing(); } return; }
   priceBook.estimating = true; priceBook.msg = `Looking up typical prices near ${esc(rest.city || "you")} for ${need.length} ingredients. This takes about 30 seconds…`; renderPricing();
+  // Small batches, three at a time: each answer stays well inside Gemini's and Vercel's time limits,
+  // and one slow batch doesn't lose the others.
+  const batches = [];
+  for (let i = 0; i < need.length; i += 8) batches.push(need.slice(i, i + 8));
+  const names = { distributor: "Typical distributor", wholesale: "Typical wholesale club", local: "Typical farmers market" };
+  const rows = [], sources = [], problems = [];
   try {
     const { data } = await sb.auth.getSession();
-    const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
-      body: JSON.stringify({ action: "prices", where: [rest.city, rest.state].filter(Boolean).join(", "), today: dayStr(new Date()), items: need.map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }) });
-    const out = await r.json().catch(() => ({}));
-    if (r.status === 503 || r.status === 404) { priceBook.msg = "Price estimates use the Gemini helper, which isn't connected yet (see the README's Specials section)."; return; }
-    if (!r.ok) { priceBook.msg = esc(out.error || "Couldn't look up prices. Try again."); return; }
-    const names = { distributor: "Typical distributor", wholesale: "Typical wholesale club", local: "Typical farmers market" };
-    const rows = [];
-    for (const x of out.items || []) {
-      const ing = need.find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
-      if (!ing) continue;
-      for (const k of ["distributor", "wholesale", "local"]) if (x[k]?.price > 0) rows.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: names[k], supplier_type: k,
-        unit: ing.unit, unit_cost: x[k].price, low_cost: x[k].low, high_cost: x[k].high, source: "estimate", observed_on: dayStr(new Date()), note: [x.note, ...(out.sources || []).slice(0, 2).map((s) => s.uri)].filter(Boolean).join(" | ").slice(0, 500) });
-    }
+    const ask = async (batch) => {
+      const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+        body: JSON.stringify({ action: "prices", where: [rest.city, rest.state].filter(Boolean).join(", "), today: dayStr(new Date()), items: batch.map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }) });
+      const out = await r.json().catch(() => ({}));
+      if (r.status === 503 || r.status === 404) throw Object.assign(new Error("not_configured"), { code: "not_configured" });
+      if (!r.ok) throw new Error(out.error || (r.status === 504 ? "The lookup took too long." : `Error ${r.status}`));
+      for (const x of out.items || []) {
+        const ing = batch.find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
+        if (!ing) continue;
+        for (const k of ["distributor", "wholesale", "local"]) if (x[k]?.price > 0) rows.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: names[k], supplier_type: k,
+          unit: ing.unit, unit_cost: x[k].price, low_cost: x[k].low, high_cost: x[k].high, source: "estimate", observed_on: dayStr(new Date()), note: [x.note, ...(out.sources || []).slice(0, 2).map((s) => s.uri)].filter(Boolean).join(" | ").slice(0, 500) });
+      }
+      sources.push(...(out.sources || []));
+    };
+    const results = await Promise.allSettled(batches.map(ask));
+    const failed = results.filter((x) => x.status === "rejected");
+    if (failed.some((x) => x.reason?.code === "not_configured")) { priceBook.msg = "Price estimates use the Gemini helper, which isn't connected yet (see the README's Specials section)."; return; }
+    problems.push(...new Set(failed.map((x) => String(x.reason?.message || x.reason))));
+    if (!rows.length) { priceBook.msg = `Couldn't look up prices: ${esc(problems.join(" ") || "no answer")} Try again in a minute.`; return; }
     await addPricePoints(rows);
-    priceBook.msg = `Added ${rows.length} estimated prices for ${new Set(rows.map((r) => r.ingredient_id)).size} ingredients${out.sources?.length ? `, checked with Google Search (${out.sources.slice(0, 3).map((s) => `<a href="${esc(s.uri)}" target="_blank" rel="noopener">${esc(s.title || "source")}</a>`).join(", ")})` : ""}. Estimates are a starting point: real prices from invoices, receipts and quotes replace them.`;
+    const uniq = [...new Map(sources.map((s) => [s.uri, s])).values()].slice(0, 3);
+    priceBook.msg = `Added estimated prices for ${new Set(rows.map((r) => r.ingredient_id)).size} ingredients${uniq.length ? `, checked with Google Search (${uniq.map((s) => `<a href="${esc(s.uri)}" target="_blank" rel="noopener">${esc(s.title || "source")}</a>`).join(", ")})` : ""}.` +
+      (failed.length ? ` ${failed.length} of ${batches.length} lookups didn't answer; click Estimate missing prices to try those again.` : "") +
+      " Estimates are a starting point: real prices from invoices, receipts and quotes replace them.";
   } catch { priceBook.msg = "Couldn't reach the price lookup. Check your internet and try again."; }
   finally { priceBook.estimating = false; renderPricing(); }
 }

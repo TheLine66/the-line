@@ -529,13 +529,16 @@ const IDEAS_SCHEMA = {
 // These are estimates to fill gaps until real prices come in from invoices,
 // receipts and quotes; the app labels them that way.
 async function estimatePrices(b, key, res) {
-  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 25)
+  // Small batches (the page sends 8 at a time) keep each answer well inside the time limit.
+  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 10)
     .map((i) => ({ name: clip(i.name, 80), unit: clip(i.unit, 20), cost: Number(i.cost) || 0 })).filter((i) => i.name && i.unit);
   if (!items.length) return res.status(400).json({ error: "No ingredients to price." });
   const where = clip(b.where, 120) || "the United States";
   const list = items.map((i) => `- ${i.name} (we cost it per ${i.unit}; we pay about $${i.cost.toFixed(2)} per ${i.unit} now)`).join("\n");
   try {
     const model = await pickModel(key);
+    // Gemini 3 "thinks" before answering; a quick price lookup doesn't need much of that.
+    const quick = /gemini-3/i.test(model) ? { thinkingConfig: { thinkingLevel: "low" } } : null;
     // 1. Look up current typical prices.
     let facts = "", sources = [];
     try {
@@ -548,7 +551,8 @@ For each item below, find current typical prices in or near ${where} at:
 Use USDA Market News reports, store websites and recent price reports. Short bullet points with dollar prices and the pack size or unit, facts only.
 ${list}` }] }],
         tools: [{ google_search: {} }],
-      }, key, 25000);
+        ...(quick ? { generationConfig: quick } : {}),
+      }, key, 15000);
       if (r.ok) {
         const data = await r.json();
         const cand = data?.candidates?.[0];
@@ -558,7 +562,7 @@ ${list}` }] }],
       }
     } catch { /* no search results: estimate from general knowledge */ }
     // 2. Turn them into numbers in the restaurant's units.
-    const r = await callGemini(model, {
+    const priceAsk = (cfg) => callGemini(model, {
       contents: [{ role: "user", parts: [{ text: `Estimate the typical price of each item at three kinds of places near ${where}: "distributor" (Sysco / US Foods case price), "wholesale" (Costco / Sam's Club / Restaurant Depot), "local" (farmers market or local farm).
 Give every price per ONE of the unit we cost the item in (convert pack and case prices: 1 lb = 16 oz, 1 gal = 128 fl oz, treat fl oz and oz the same for liquids, 1 dozen = 12 each).
 Give a low and high for the usual range. Set a place to null if that kind of place doesn't sell it (alcohol is only sold to restaurants by licensed distributors; dry goods aren't sold at farmers markets).
@@ -566,8 +570,10 @@ Be realistic, not optimistic. Warehouse clubs are usually a little cheaper than 
 ${facts ? `Prices found with a web search:\n${facts}\n` : ""}
 Items:
 ${list}` }] }],
-      generationConfig: { responseMimeType: "application/json", responseSchema: PRICE_SCHEMA },
-    }, key, 30000);   // both steps together stay under Vercel's 60-second limit
+      generationConfig: { responseMimeType: "application/json", responseSchema: PRICE_SCHEMA, ...(cfg || {}) },
+    }, key, 35000);   // both steps together stay under Vercel's 60-second limit
+    let r = await priceAsk(quick);
+    if (r.status === 400 && quick) r = await priceAsk(null);   // a model that doesn't take the "think less" setting
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = String(data?.error?.message || "");
@@ -580,7 +586,8 @@ ${list}` }] }],
     const ok = (p) => p && Number(p.price) > 0 ? { price: Number(p.price), low: Number(p.low) > 0 ? Number(p.low) : null, high: Number(p.high) > 0 ? Number(p.high) : null } : null;
     const rows = (Array.isArray(out?.items) ? out.items : []).map((x) => ({ name: clip(x.name, 80), distributor: ok(x.distributor), wholesale: ok(x.wholesale), local: ok(x.local), note: clip(x.note, 200) }));
     return res.status(200).json({ model, items: rows, sources });
-  } catch {
+  } catch (e) {
+    if (e?.name === "AbortError") return res.status(504).json({ error: "Gemini took too long to answer. Try again." });
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
   }
 }
