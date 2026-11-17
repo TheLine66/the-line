@@ -1386,7 +1386,10 @@ const fileB64 = (file) => new Promise((resolve, reject) => { const r = new FileR
 // Why the Gemini helper didn't answer: 404 = this copy of the site has no
 // server (opened as a file, or not on Vercel); 503 = it's on Vercel but the
 // keys aren't set for this deployment (branch previews need them ticked too).
-function geminiMissing(status) {
+function geminiMissing(status, missing) {
+  if (status === 503 && Array.isArray(missing) && missing.length) {
+    return `This copy of the site is missing ${missing.join(", ")} in Vercel. Check the spelling in Settings → Environments → Preview (or Production), then redeploy.`;
+  }
   return status === 404
     ? "The Gemini helper only runs on your Vercel site. Open the app from its Vercel link, not from a file on your computer."
     : "This copy of the site doesn't have the Gemini key. In Vercel → Settings → Environment Variables, tick Preview (and Production) on GEMINI_API_KEY, SUPABASE_URL and SUPABASE_KEY, then redeploy.";
@@ -1410,7 +1413,7 @@ async function scanInvoice(file) {
         ingredients: [...ingredients.values()].map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }),
     });
     const out = await r.json().catch(() => ({}));
-    if (r.status === 503 || r.status === 404) { note.textContent = ""; toast(geminiMissing(r.status), "err"); return; }
+    if (r.status === 503 || r.status === 404) { note.textContent = ""; toast(geminiMissing(r.status, out.missing), "err"); return; }
     if (!r.ok) { note.textContent = ""; toast(out.error || "Couldn't read that invoice. Try again.", "err"); return; }
     const inv = out.invoice, base = /^\d{4}-\d{2}-\d{2}$/.test(inv.invoice_date || "") ? inv.invoice_date : dayStr(new Date());
     invoiceDraft = { supplier: inv.supplier || "", date: base, rows: inv.items.map((x) => {
@@ -1541,7 +1544,7 @@ async function scanMenu(fileList) {
     });
     const out = await r.json().catch(() => ({}));
     note.textContent = "";
-    if (r.status === 503 || r.status === 404) { toast(geminiMissing(r.status), "err"); return; }
+    if (r.status === 503 || r.status === 404) { toast(geminiMissing(r.status, out.missing), "err"); return; }
     if (!r.ok) { toast(out.error || "Couldn't read that menu. Try again.", "err"); return; }
     menuDraft = buildMenuDraft(out.menu);
     renderMenuScan();

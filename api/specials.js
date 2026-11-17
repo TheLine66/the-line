@@ -34,7 +34,11 @@ module.exports = async function handler(req, res) {
   const key = process.env.GEMINI_API_KEY;
   const sbUrl = String(process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
   const sbKey = String(process.env.SUPABASE_KEY || "").trim();
-  if (!key || !sbUrl || !sbKey) return res.status(503).json({ error: "not_configured" });
+  if (!key || !sbUrl || !sbKey) {
+    // Names only, never values, so the owner can see which setting this deployment lacks.
+    const missing = [["GEMINI_API_KEY", key], ["SUPABASE_URL", sbUrl], ["SUPABASE_KEY", sbKey]].filter(([, v]) => !v).map(([n]) => n);
+    return res.status(503).json({ error: "not_configured", missing });
+  }
 
   // 1. Only people signed in to this app's Supabase project can use it.
   const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
