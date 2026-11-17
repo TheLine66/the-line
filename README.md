@@ -223,6 +223,8 @@ This makes sure any email links (for example, password resets) send people to yo
 
 **Settings:** change the restaurant name or your target food-cost range (28 / 32 / 35% by default).
 
+**Restaurant addresses need five more columns.** If you set up your database before addresses existed, run `supabase/address.sql` once in the SQL Editor (same steps as Step 3). New restaurants then ask for the full address, and existing ones can add theirs under **Settings**.
+
 **Labor Costs and MOD Report need three more tables.** If you set up your database before these tabs existed, run `supabase/labor-and-mod.sql` once in the SQL Editor (same steps as Step 3). Until you do, the rest of the app works normally and those two tabs show a reminder. Labor targets (25 / 28 / 32% of sales by default) and the payroll taxes and benefits add-on (10%) are in **Settings**.
 
 **Delete my account:** at the bottom of **Settings** (or on the "Add a restaurant" screen). Type your email, then confirm "Are you sure?". It deletes your login and all your restaurants, so you can sign up again with the same email. (If you set up your database before this button existed, run `supabase/delete-account.sql` in the SQL Editor once first.)

@@ -83,6 +83,16 @@
       <h2>Add a restaurant</h2>
       <form id="onboardForm">
         <label>Restaurant name<input id="onboardName" required maxlength="100" placeholder="e.g. The Kennedy"></label>
+        <fieldset class="addr" id="onbAddress">
+          <legend>Restaurant address</legend>
+          <label>Street address<input id="onbStreet" maxlength="200" autocomplete="address-line1" placeholder="e.g. 412 Market Square" required></label>
+          <label>Suite, unit or floor (optional)<input id="onbStreet2" maxlength="100" autocomplete="address-line2"></label>
+          <div class="addr-row">
+            <label class="addr-city">City<input id="onbCity" maxlength="100" autocomplete="address-level2" placeholder="e.g. Knoxville" required></label>
+            <label class="addr-state">State<select id="onbState" class="light-select state-select" autocomplete="address-level1" required></select></label>
+            <label class="addr-zip">ZIP<input id="onbZip" maxlength="10" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{5}(-[0-9]{4})?" title="5 digits, like 37902" placeholder="37902" required></label>
+          </div>
+        </fieldset>
         <label>Start with
           <select id="onboardSeed" class="light-select">
             <option value="">Blank: I'll add my own menu</option>
@@ -463,6 +473,16 @@
   <form id="settingsForm" method="dialog">
     <h2>Restaurant settings</h2>
     <label>Restaurant name<input id="setName" required maxlength="100"></label>
+    <fieldset class="addr" id="setAddress">
+          <legend>Restaurant address</legend>
+          <label>Street address<input id="setStreet" maxlength="200" autocomplete="address-line1" placeholder="e.g. 412 Market Square" required></label>
+          <label>Suite, unit or floor (optional)<input id="setStreet2" maxlength="100" autocomplete="address-line2"></label>
+          <div class="addr-row">
+            <label class="addr-city">City<input id="setCity" maxlength="100" autocomplete="address-level2" placeholder="e.g. Knoxville" required></label>
+            <label class="addr-state">State<select id="setState" class="light-select state-select" autocomplete="address-level1" required></select></label>
+            <label class="addr-zip">ZIP<input id="setZip" maxlength="10" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{5}(-[0-9]{4})?" title="5 digits, like 37902" placeholder="37902" required></label>
+          </div>
+        </fieldset>
     <p class="muted small">Food cost targets (% of menu price)</p>
     <div class="three">
       <label>Target low %<input id="setLow" type="number" min="0" max="100" step="0.5" required></label>

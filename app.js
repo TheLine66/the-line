@@ -3238,8 +3238,47 @@ async function deleteScenario() {
 }
 
 // ---------------------------------------------------------- Restaurants
+// ---------------------------------------------------------- Address
+// Each restaurant's full address (supabase/address.sql). Street, city, state
+// and ZIP are required for a new restaurant; suite / unit is optional.
+const US_STATES = [["AL", "Alabama"], ["AK", "Alaska"], ["AZ", "Arizona"], ["AR", "Arkansas"], ["CA", "California"], ["CO", "Colorado"], ["CT", "Connecticut"],
+  ["DE", "Delaware"], ["DC", "District of Columbia"], ["FL", "Florida"], ["GA", "Georgia"], ["HI", "Hawaii"], ["ID", "Idaho"], ["IL", "Illinois"], ["IN", "Indiana"],
+  ["IA", "Iowa"], ["KS", "Kansas"], ["KY", "Kentucky"], ["LA", "Louisiana"], ["ME", "Maine"], ["MD", "Maryland"], ["MA", "Massachusetts"], ["MI", "Michigan"],
+  ["MN", "Minnesota"], ["MS", "Mississippi"], ["MO", "Missouri"], ["MT", "Montana"], ["NE", "Nebraska"], ["NV", "Nevada"], ["NH", "New Hampshire"],
+  ["NJ", "New Jersey"], ["NM", "New Mexico"], ["NY", "New York"], ["NC", "North Carolina"], ["ND", "North Dakota"], ["OH", "Ohio"], ["OK", "Oklahoma"],
+  ["OR", "Oregon"], ["PA", "Pennsylvania"], ["RI", "Rhode Island"], ["SC", "South Carolina"], ["SD", "South Dakota"], ["TN", "Tennessee"], ["TX", "Texas"],
+  ["UT", "Utah"], ["VT", "Vermont"], ["VA", "Virginia"], ["WA", "Washington"], ["WV", "West Virginia"], ["WI", "Wisconsin"], ["WY", "Wyoming"]];
+document.querySelectorAll(".state-select").forEach((sel) => {
+  sel.innerHTML = `<option value="">Choose…</option>` + US_STATES.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+});
+const ADDRESS_COLS = ["address_line1", "address_line2", "city", "state", "postal_code"];
+const hasAddressCols = (r) => !!r && "address_line1" in r;
+function readAddress(p) {
+  return { address_line1: $(p + "Street").value.trim(), address_line2: $(p + "Street2").value.trim() || null,
+    city: $(p + "City").value.trim(), state: $(p + "State").value, postal_code: $(p + "Zip").value.trim() };
+}
+function fillAddress(p, r) {
+  $(p + "Street").value = r?.address_line1 || ""; $(p + "Street2").value = r?.address_line2 || "";
+  $(p + "City").value = r?.city || ""; $(p + "State").value = r?.state || ""; $(p + "Zip").value = r?.postal_code || "";
+}
+// A problem with the address in words, or "" if it's fine.
+function addressProblem(a) {
+  if (!a.address_line1) return "Add the street address.";
+  if (!a.city) return "Add the city.";
+  if (!a.state) return "Choose the state.";
+  if (!/^\d{5}(-\d{4})?$/.test(a.postal_code)) return "ZIP should be 5 digits, like 37902.";
+  return "";
+}
+const isMissingAddress = (err) => /42703|PGRST204/.test(err?.code || "") && /address_line|postal_code|city|state/.test(err?.message || "");
+const ADDRESS_SETUP = "One more database step: in Supabase, open SQL Editor, run supabase/address.sql, then try again.";
+function oneLineAddress(r) {
+  if (!r?.address_line1) return "";
+  return `${r.address_line1}${r.address_line2 ? `, ${r.address_line2}` : ""}, ${r.city}, ${r.state} ${r.postal_code}`;
+}
+
 function openOnboarding(canCancel) {
   $("onboardName").value = "";
+  fillAddress("onb", null);
   const sel = $("onboardSeed");
   sel.innerHTML = `<option value="">Blank: I'll add my own menu</option>` +
     Object.entries(window.SEEDS || {}).map(([k, v]) => `<option value="${k}">Sample: ${esc(v.label)}</option>`).join("");
@@ -3256,6 +3295,8 @@ async function createRestaurant(e) {
   const name = $("onboardName").value.trim();
   if (!name) return;
   const msg = $("onboardMsg"), btn = $("onboardSubmit");
+  const address = readAddress("onb"), bad = addressProblem(address);
+  if (bad) { msg.className = "form-msg"; msg.textContent = bad; return; }
   btn.disabled = true;
   msg.className = "form-msg ok";
   msg.textContent = "Creating your restaurant…";
@@ -3263,8 +3304,11 @@ async function createRestaurant(e) {
   try {
     const seedKey = $("onboardSeed").value;
     const t = window.SEEDS?.[seedKey]?.targets;
-    const row = t ? { name, target_low: t.low, target_mid: t.mid, target_high: t.high } : { name };
-    created = await run(sb.from("restaurants").insert(row).select("*").single());
+    const row = { name, ...address, ...(t ? { target_low: t.low, target_mid: t.mid, target_high: t.high } : {}) };
+    const res = await sb.from("restaurants").insert(row).select("*").single();
+    if (res.error && isMissingAddress(res.error)) { msg.className = "form-msg"; msg.textContent = ADDRESS_SETUP; return; }
+    if (res.error) throw res.error;
+    created = res.data;
     if (seedKey) {
       msg.textContent = "Loading the sample menu (a few seconds)…";
       await seedRestaurant(created.id, seedKey);
@@ -3280,6 +3324,10 @@ async function createRestaurant(e) {
 
 function openSettings() {
   $("setName").value = rest.name;
+  // The address section shows once supabase/address.sql has been run.
+  $("setAddress").classList.toggle("hidden", !hasAddressCols(rest));
+  $("setAddress").querySelectorAll("input:not(#setStreet2), select").forEach((x) => { x.required = hasAddressCols(rest); });
+  fillAddress("set", rest);
   $("setLow").value = Number(rest.target_low);
   $("setMid").value = Number(rest.target_mid);
   $("setHigh").value = Number(rest.target_high);
@@ -3304,6 +3352,11 @@ async function saveSettings(e) {
   if (![low, mid, high].every((n) => Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Targets must be between 0 and 100."; return; }
   if (!(low <= mid && mid <= high)) { $("settingsMsg").textContent = "Targets must go low ≤ mid ≤ high."; return; }
   const changes = { name, target_low: low, target_mid: mid, target_high: high };
+  if (hasAddressCols(rest)) {
+    const address = readAddress("set"), bad = addressProblem(address);
+    if (bad) { $("settingsMsg").textContent = bad; return; }
+    Object.assign(changes, address);
+  }
   if (LABOR_ON && "labor_low" in rest) {
     const ll = Number($("setLaborLow").value), lm = Number($("setLaborMid").value), lh = Number($("setLaborHigh").value), lb = Number($("setBurden").value);
     if (![ll, lm, lh, lb].every((n) => $("setLaborLow").value !== "" && Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Labor targets and the add-on must be between 0 and 100."; return; }

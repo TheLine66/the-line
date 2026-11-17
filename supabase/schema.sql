@@ -255,3 +255,11 @@ revoke all on public.staff, public.labor_hours, public.mod_reports from anon;
 alter table public.ingredients
   add column if not exists on_hand numeric(10,2) check (on_hand >= 0),
   add column if not exists use_by  date;
+
+-- ---------- Each restaurant's full address (same as supabase/address.sql)
+alter table public.restaurants
+  add column if not exists address_line1 text check (char_length(address_line1) <= 200),
+  add column if not exists address_line2 text check (char_length(address_line2) <= 100),
+  add column if not exists city          text check (char_length(city) <= 100),
+  add column if not exists state         text check (state ~ '^[A-Z]{2}$'),
+  add column if not exists postal_code   text check (postal_code ~ '^[0-9]{5}(-[0-9]{4})?$');
