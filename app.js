@@ -1553,11 +1553,31 @@ function renderPricing() {
 }
 function ingredientCategoryName(name) { return PROC_CATS.find((c) => c.id === ingredientCategory(name)).name; }
 
+// One price per ingredient per place: a newer price from the same place
+// replaces the old one ("Costco", "Costco Wholesale" and "COSTCO WHOLESALE
+// #1145" are the same place), and different places are all kept. An older
+// price never replaces a newer one. The new price is saved first, then the
+// old one is removed, so a failed save never loses a price.
+const placeKey = (p) => `${p.ingredient_id}|${p.supplier_type}|${brandOf(p.supplier)}`;
 async function addPricePoints(rows) {
-  if (!rows.length) return;
-  const saved = await run(sb.from("price_points").insert(rows).select("*"));
-  priceBook.points = [...saved.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) })), ...priceBook.points]
-    .sort((a, b) => String(b.observed_on).localeCompare(String(a.observed_on)));
+  const incoming = new Map();                       // the same item twice in one batch: keep the newest
+  for (const r of rows) { const k = placeKey(r), had = incoming.get(k); if (!had || String(r.observed_on) >= String(had.observed_on)) incoming.set(k, r); }
+  const keep = [], replace = [];
+  for (const [k, r] of incoming) {
+    const old = priceBook.points.filter((p) => placeKey(p) === k);
+    if (old.some((p) => String(p.observed_on) > String(r.observed_on))) continue;   // we already have a newer price from there
+    keep.push(r); replace.push(...old.map((p) => p.id));
+  }
+  if (!keep.length) return { saved: 0, skipped: rows.length };
+  const saved = await run(sb.from("price_points").insert(keep).select("*"));
+  if (replace.length) {
+    try { await run(sb.from("price_points").delete().in("id", replace)); } catch { /* the new prices are saved; old rows just stay */ }
+  }
+  const gone = new Set(replace);
+  priceBook.points = [...saved.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) })),
+    ...priceBook.points.filter((p) => !gone.has(p.id))]
+    .sort((a, b) => String(b.observed_on).localeCompare(String(a.observed_on)) || String(b.created_at).localeCompare(String(a.created_at)));
+  return { saved: saved.length, skipped: rows.length - keep.length, replaced: replace.length };
 }
 
 async function savePriceForm(form) {
