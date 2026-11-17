@@ -254,6 +254,8 @@ Your key is like a password. **Never** put it in a file, in GitHub, or in a chat
 
 3. Go to **Deployments**, click the **⋯** next to the newest one, and choose **Redeploy**. Vercel only picks up new settings on a fresh deploy.
 
+> **Testing a branch?** Vercel gives each branch its own *Preview* link, and Preview doesn't get these keys unless you tick it. When you add or edit each of the three, tick **Production** *and* **Preview**, then redeploy the branch. Otherwise Specials, invoice scanning and menu scanning say the Gemini helper isn't connected.
+
 ### Step C: Use it
 Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day / event** or **Anything goes**, fill in the boxes, and click **Make the menu**. It takes a few seconds. Don't like it? Click **Try another version**: it's told what it already suggested, so you get new dishes. **Print the menu** gives you a clean copy.
 
