@@ -283,7 +283,7 @@ The **Procurement** page puts the restaurant on a Google map and searches Google
 2. **Billing:** left menu → **Billing** → link a billing account. Google asks for a card, but its free monthly allowance covers a class demo, so this should cost $0. You can also set a budget alert there.
 3. **Turn on two APIs:** left menu → **APIs & Services** → **Library**. Search for and **Enable** both **Maps JavaScript API** and **Places API (New)**.
 4. **Make the key:** **APIs & Services** → **Credentials** → **Create credentials** → **API key**. Copy it.
-5. **Lock the key to your site** (it's used in the browser, so this is what keeps others from using it): click the key → **Application restrictions** → **Websites** → add `https://the-line-ten.vercel.app/*` and `https://the-line-git-dev-the-line2.vercel.app/*` (your live site and your dev preview). Under **API restrictions** → **Restrict key** → choose **Maps JavaScript API** and **Places API (New)** → **Save**.
+5. **Lock the key to your site** (it's used in the browser, so this is what keeps others from using it): click the key → **Application restrictions** → **Websites** → add `https://the-line-ten.vercel.app/*` (your live site) and `https://the-line-git-procurement-the-line2.vercel.app/*` (the Procurement branch preview). Each new branch gets its own preview address, so add a line for any branch you want the map to work on. Under **API restrictions** → **Restrict key** → choose **Maps JavaScript API** and **Places API (New)** → **Save**.
 
 ### Step B: Give Vercel the key (once)
 1. **vercel.com** → the **the-line** project → **Settings** → **Environment Variables**.
