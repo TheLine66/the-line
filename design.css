@@ -807,3 +807,4 @@ fieldset.addr legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-wei
 @media (max-width: 900px) { .proc-grid { grid-template-columns: 1fr; } #procMap { height: 380px; } .proc-list-card { max-height: none; } }
 .proc-grid { margin-bottom: 18px; }
 .proc-dot.proc-home { width: 14px; height: 14px; background: #163829; border: 3px solid #B8902C; box-shadow: none; vertical-align: -2px; }
+.proc-msg { font-size: 15px; line-height: 1.5; margin: 4px 0 12px; }

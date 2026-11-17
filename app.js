@@ -1110,29 +1110,20 @@ function classifySource(el, home) {
     hours: t.opening_hours || "" };
 }
 
-async function findSources(home, miles) {
-  const key = `line.src.${rest.id}.${miles}`;
-  const cached = procCache(key);
-  if (cached && Date.now() - cached.t < 86400000 && Math.abs(cached.lat - home.lat) < 1e-6 && Math.abs(cached.lon - home.lon) < 1e-6) return cached.list;
-  const m = Math.round(miles * 1609.34), far = Math.max(m, 160934);   // distributors: look out to at least 100 miles
-  const at = `${home.lat.toFixed(6)},${home.lon.toFixed(6)}`;
-  const query = `[out:json][timeout:25];
-(
-  nwr["amenity"="marketplace"]["name"](around:${m},${at});
-  nwr["shop"~"^(farm|butcher|seafood|greengrocer|cheese)$"]["name"](around:${m},${at});
-  nwr["shop"="wholesale"]["name"](around:${m},${at});
-  nwr["name"~"${CLUB_RE}",i](around:${m},${at});
-  nwr["name"~"${DIST_RE}",i](around:${far},${at});
-);
-out center tags 400;`;
-  let data = null;
-  for (const url of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]) {
+// The free places search (Overpass) is run by volunteers, so it can be slow
+// or busy: try three servers, give each a time limit, and keep the search small.
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+async function overpass(query) {
+  for (const url of OVERPASS) {
+    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 30000);
     try {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(query) });
-      if (res.ok) { data = await res.json(); break; }
-    } catch { /* try the next server */ }
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(query), signal: ctrl.signal });
+      if (res.ok) return await res.json();
+    } catch { /* busy or timed out: try the next server */ } finally { clearTimeout(timer); }
   }
-  if (!data) throw new Error("sources");
+  throw new Error("places search");
+}
+function toSources(data, home) {
   const seen = new Set(), list = [];
   for (const el of data.elements || []) {
     const s = classifySource(el, home);
@@ -1141,8 +1132,38 @@ out center tags 400;`;
     if (seen.has(dupe)) continue;
     seen.add(dupe); list.push(s);
   }
-  list.sort((a, b) => a.miles - b.miles);
-  procCache(key, { t: Date.now(), lat: home.lat, lon: home.lon, list });
+  return list;
+}
+// Step 1: local places and wholesale clubs within the chosen distance.
+// Step 2: distributor warehouses out to 100 miles (they deliver regionally).
+// Warehouses are buildings and lots, so step 2 only looks at those, which keeps it fast.
+async function findSources(home, miles, onFirst) {
+  const key = `line.src.${rest.id}.${miles}`;
+  const cached = procCache(key);
+  if (cached && cached.done && Date.now() - cached.t < 86400000 && Math.abs(cached.lat - home.lat) < 1e-6 && Math.abs(cached.lon - home.lon) < 1e-6) return cached.list;
+  const m = Math.round(miles * 1609.34), far = 160934;
+  const at = `${home.lat.toFixed(6)},${home.lon.toFixed(6)}`;
+  const near = await overpass(`[out:json][timeout:25];
+(
+  nwr["amenity"="marketplace"]["name"](around:${m},${at});
+  nwr["shop"~"^(farm|butcher|seafood|greengrocer|cheese|wholesale)$"]["name"](around:${m},${at});
+  wr["name"~"${CLUB_RE}",i](around:${m},${at});
+);
+out center tags 300;`);
+  let list = toSources(near, home);
+  onFirst?.(list.slice().sort((x, y) => x.miles - y.miles));
+  try {
+    const dist = await overpass(`[out:json][timeout:25];
+(
+  wr["name"~"${DIST_RE}",i](around:${far},${at});
+  node["name"~"${DIST_RE}",i]["office"](around:${far},${at});
+);
+out center tags 100;`);
+    const have = new Set(list.map((s) => s.id));
+    list = list.concat(toSources(dist, home).filter((s) => !have.has(s.id)));
+  } catch { list.partial = true; }
+  list.sort((x, y) => x.miles - y.miles);
+  procCache(key, { t: Date.now(), lat: home.lat, lon: home.lon, list, done: !list.partial });
   return list;
 }
 
@@ -1214,26 +1235,38 @@ async function renderProcurement() {
 async function procLoad() {
   const status = $("procStatus");
   const want = `${rest.id}|${oneLineAddress(rest)}|${proc.radius}`;
+  const say = (msg, retry = false) => {
+    status.textContent = msg;
+    if (!proc.sources) $("procList").innerHTML = `<p class="proc-msg">${esc(msg)}</p>${retry ? `<button class="ghostbtn dark" id="procRetry" type="button">Try again</button>` : ""}`;
+  };
   try {
     await loadLeaflet();
-  } catch { status.textContent = "The map couldn't load. Check your internet connection."; return; }
+  } catch { say("The map couldn't load. Check your internet connection.", true); return; }
   if (!proc.geo || proc.geo.addr !== oneLineAddress(rest) || proc.loadingFor.split("|")[0] !== rest.id) {
-    status.textContent = "Finding your restaurant on the map…";
     proc.sources = null;
+    say("Finding your restaurant on the map…");
     try { proc.geo = await geocodeRestaurant(rest); } catch { proc.geo = null; }
-    if (!proc.geo) { status.textContent = "Couldn't find that address on the map. Check it in Settings."; return; }
+    if (!proc.geo) { say("Couldn't find that address on the map. Check it in Settings.", true); return; }
   }
   procDrawMap();
   if (!proc.sources || proc.loadingFor !== want) {
     proc.loadingFor = want;
-    status.textContent = "Looking for sources nearby…";
-    $("procBlade")?.classList.remove("hidden");
+    proc.sources = null;
+    procDrawSources();                              // your restaurant's pin, right away
+    say("Searching for places nearby. This can take up to 30 seconds…");
     try {
-      const found = await findSources(proc.geo, Math.max(proc.radius, 25));
-      if (proc.loadingFor !== want) return;   // the radius or restaurant changed meanwhile
+      const found = await findSources(proc.geo, Math.max(proc.radius, 25), (first) => {
+        if (proc.loadingFor !== want) return;
+        proc.sources = first; procDrawSources();
+        status.textContent = "Still looking for distributor warehouses…";
+      });
+      if (proc.loadingFor !== want) return;         // the radius or restaurant changed meanwhile
       proc.sources = found;
+      if (found.partial) { procDrawSources(); status.textContent = "Couldn't finish the distributor search. The rest is shown."; return; }
     } catch {
-      status.textContent = "The places search is busy. Try again in a minute.";
+      if (proc.loadingFor !== want) return;
+      proc.loadingFor = "";
+      say("The free places search is busy right now. Wait a minute, then try again.", true);
       return;
     }
   }
@@ -1248,9 +1281,9 @@ function procDrawMap() {
   const home = [proc.geo.lat, proc.geo.lon];
   if (!proc.map) {
     proc.map = L.map(box, { scrollWheelZoom: false }).setView(home, 11);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-      maxZoom: 19, subdomains: "abcd",
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(proc.map);
     proc.layer = L.layerGroup().addTo(proc.map);
   }
@@ -1261,6 +1294,12 @@ function procDrawSources() {
   if (!proc.map) return;
   const home = [proc.geo.lat, proc.geo.lon], list = procVisible();
   proc.layer.clearLayers();
+  if (!proc.sources) {   // still searching: just the restaurant
+    L.circleMarker(home, { radius: 11, color: "#B8902C", weight: 4, fillColor: "#163829", fillOpacity: 1 })
+      .bindTooltip(`<strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}`).addTo(proc.layer);
+    proc.map.setView(home, 11);
+    return;
+  }
   const circle = L.circle(home, { radius: proc.radius * 1609.34, color: "#163829", weight: 1, opacity: 0.4, fill: false, dashArray: "6 6" }).addTo(proc.layer);
   const label = (s) => (s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind);
   for (const s of list) {
@@ -3831,6 +3870,7 @@ function wireControls() {
     if (c) { proc.cat = c.dataset.procCat; renderProcurement(); return; }
     const go = e.target.closest("[data-proc-go]");
     if (go) procFocus(go.dataset.procGo);
+    if (e.target.closest("#procRetry")) { proc.loadingFor = ""; proc.sources = null; procLoad(); }
   });
   $("page-procurement").addEventListener("change", (e) => {
     if (e.target.id === "procRadius") { proc.radius = Number(e.target.value); renderProcurement(); }
