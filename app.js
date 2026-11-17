@@ -1114,14 +1114,23 @@ function classifySource(el, home) {
 // or busy: try three servers, give each a time limit, and keep the search small.
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 async function overpass(query) {
+  const why = [];   // each server's answer, shown on the page if they all fail
   for (const url of OVERPASS) {
-    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 30000);
+    const host = new URL(url).hostname, ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 30000);
     try {
       const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(query), signal: ctrl.signal });
       if (res.ok) return await res.json();
-    } catch { /* busy or timed out: try the next server */ } finally { clearTimeout(timer); }
+      // Overpass explains errors in a short web page; keep its first line of text.
+      const text = (await res.text().catch(() => "")).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      const said = (text.match(/Error:[^.]*\.?/) || [text])[0].slice(0, 160);
+      why.push(`${host}: error ${res.status}${said ? ` (${said})` : ""}`);
+    } catch (e) {
+      why.push(`${host}: ${e.name === "AbortError" ? "no answer in 30 seconds" : "couldn't connect (blocked or offline)"}`);
+    } finally { clearTimeout(timer); }
   }
-  throw new Error("places search");
+  const err = new Error("places search");
+  err.details = why;
+  throw err;
 }
 function toSources(data, home) {
   const seen = new Set(), list = [];
@@ -1143,22 +1152,25 @@ async function findSources(home, miles, onFirst) {
   if (cached && cached.done && Date.now() - cached.t < 86400000 && Math.abs(cached.lat - home.lat) < 1e-6 && Math.abs(cached.lon - home.lon) < 1e-6) return cached.list;
   const m = Math.round(miles * 1609.34), far = 160934;
   const at = `${home.lat.toFixed(6)},${home.lon.toFixed(6)}`;
+  // Written in the plainest, oldest form of the search language so every server accepts it.
+  const each = (filter, r) => ["node", "way", "relation"].map((t) => `  ${t}${filter}(around:${r},${at});`).join("\n");
   const near = await overpass(`[out:json][timeout:25];
 (
-  nwr["amenity"="marketplace"]["name"](around:${m},${at});
-  nwr["shop"~"^(farm|butcher|seafood|greengrocer|cheese|wholesale)$"]["name"](around:${m},${at});
-  wr["name"~"${CLUB_RE}",i](around:${m},${at});
+${each('["amenity"="marketplace"]["name"]', m)}
+${each('["shop"~"^(farm|butcher|seafood|greengrocer|cheese|wholesale)$"]["name"]', m)}
+  way["name"~"${CLUB_RE}",i](around:${m},${at});
 );
-out center tags 300;`);
+out center;`);
   let list = toSources(near, home);
   onFirst?.(list.slice().sort((x, y) => x.miles - y.miles));
   try {
     const dist = await overpass(`[out:json][timeout:25];
 (
-  wr["name"~"${DIST_RE}",i](around:${far},${at});
+  way["name"~"${DIST_RE}",i](around:${far},${at});
+  relation["name"~"${DIST_RE}",i](around:${far},${at});
   node["name"~"${DIST_RE}",i]["office"](around:${far},${at});
 );
-out center tags 100;`);
+out center;`);
     const have = new Set(list.map((s) => s.id));
     list = list.concat(toSources(dist, home).filter((s) => !have.has(s.id)));
   } catch { list.partial = true; }
@@ -1263,10 +1275,11 @@ async function procLoad() {
       if (proc.loadingFor !== want) return;         // the radius or restaurant changed meanwhile
       proc.sources = found;
       if (found.partial) { procDrawSources(); status.textContent = "Couldn't finish the distributor search. The rest is shown."; return; }
-    } catch {
+    } catch (err) {
       if (proc.loadingFor !== want) return;
       proc.loadingFor = "";
-      say("The free places search is busy right now. Wait a minute, then try again.", true);
+      say("The free places search didn't answer. Wait a minute, then try again.", true);
+      if (err.details?.length) $("procList").insertAdjacentHTML("beforeend", `<details class="proc-why" open><summary>What each server said</summary><ul>${err.details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></details>`);
       return;
     }
   }
