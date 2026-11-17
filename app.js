@@ -487,7 +487,7 @@ function computeAll() {
 const LABOR_ON = false;
 
 const PAGE_NAMES = { home: "Tonight", cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
-  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
+  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report", procurement: "Procurement" };
 if (!LABOR_ON) delete PAGE_NAMES.labor;
 
 // Which pages show as tabs in the row under the logo. Saved in this
@@ -556,6 +556,7 @@ function render() {
   else if (activePage === "specials") renderSpecials();
   else if (activePage === "labor") renderLabor();
   else if (activePage === "mod") renderMod();
+  else if (activePage === "procurement") renderProcurement();
 }
 
 function renderRestaurantSelect() {
@@ -997,6 +998,304 @@ function renderOverview() {
       ${chart}
       <p class="ov-more"><button type="button" class="linkbtn" data-goto="home">Show me the details</button></p>
     </div>`;
+}
+
+// ---------------------------------------------------------- Procurement
+// Where this restaurant can buy what it needs, on a map around its address.
+// Free, keyless data: the address is placed on the map by OpenStreetMap's
+// Nominatim, and nearby sources come from OpenStreetMap (Overpass API):
+//   - Distributors: broadline warehouses like Sysco and US Foods
+//   - Wholesale: clubs and cash-and-carry like Costco, Sam's Club, Restaurant Depot
+//   - Local: farmers markets, farm stands, butchers, seafood markets, produce stands, cheese shops
+// Each ingredient is sorted into a group (produce, meat, ...) so picking a group
+// shows only the places that sell it. Lookups are cached in this browser.
+const PROC_TYPES = {
+  distributor: { name: "Distributors", color: "#2B4C7E", what: "Broadline delivery, by account" },
+  wholesale:   { name: "Wholesale clubs", color: "#B8902C", what: "Buy in bulk, pick up yourself" },
+  local:       { name: "Local farms & markets", color: "#3F7D3A", what: "Farmers markets, farms, butchers, fish and produce shops" },
+};
+const LOCAL_KINDS = { market: "Farmers market", farm: "Farm stand", butcher: "Butcher", seafood: "Seafood market", greengrocer: "Produce stand", cheese: "Cheese shop" };
+// Ingredient groups: the words that put an ingredient in a group, and where to buy that group.
+const PROC_CATS = [
+  { id: "seafood", name: "Seafood", words: /\b(cod|fish|salmon|shrimp|prawn|crab|lobster|oyster|clam|mussel|scallop|tuna|tilapia|haddock|halibut|catfish|trout)\b/i, from: ["seafood", "wholesale", "distributor"] },
+  { id: "meat", name: "Meat", words: /\b(beef|chuck|brisket|steak|lamb|pork|bacon|rasher|banger|sausage|ham|chicken|wing|turkey|duck|veal|shank|rib|mince|corned)\b/i, from: ["butcher", "farm", "wholesale", "distributor"] },
+  { id: "dairy", name: "Dairy & eggs", words: /\b(cheese|cheddar|swiss|brie|mozzarella|parmesan|cream|milk|butter|yogurt|egg|eggs|ice cream)\b/i, from: ["cheese", "farm", "market", "wholesale", "distributor"] },
+  { id: "bar", name: "Beer, wine & spirits", words: /\b(stout|beer|ale|lager|wine|whiskey|whisky|vodka|gin|rum|tequila|bourbon|cider)\b/i, from: ["distributor"] },
+  { id: "produce", name: "Produce", words: /\b(lettuce|tomato|onion|onions|potato|potatoes|leek|leeks|celery|chive|chives|lemon|lime|herb|herbs|parsley|vegetable|root|pepper|garlic|carrot|apple|berry|berries|mushroom|cabbage|fruit|greens|spinach|kale|cucumber|peas|corn|squash|avocado|yukon)\b/i, from: ["market", "farm", "greengrocer", "wholesale", "distributor"] },
+  { id: "bakery", name: "Bread & bakery", words: /\b(bread|bun|buns|roll|rolls|rye|pretzel|sponge|cake|tortilla|bagel|brioche|baguette)\b/i, from: ["market", "wholesale", "distributor"] },
+  { id: "pantry", name: "Pantry & dry goods", words: /./, from: ["wholesale", "distributor"] },
+];
+const CHAINS = [
+  { name: "Sysco", match: /sysco/i, site: "https://www.sysco.com" },
+  { name: "US Foods", match: /us foods/i, site: "https://www.usfoods.com" },
+  { name: "Performance Foodservice", match: /performance food/i, site: "https://www.performancefoodservice.com" },
+  { name: "Gordon Food Service", match: /gordon food|gfs/i, site: "https://gfs.com" },
+];
+const DIST_RE = "Sysco|US Foods|Performance Food|Gordon Food Service|Reinhart|Ben E\\\\. Keith|Shamrock Foods|Cheney Brothers|Chefs' Warehouse";
+const CLUB_RE = "Costco|Sam's Club|Restaurant Depot|BJ's Wholesale|Smart & Final|Chef'Store|Jetro|GFS Store|Gordon Food Service Store|Webstaurant";
+
+let proc = { cat: "all", radius: 25, show: new Set(["distributor", "wholesale", "local"]), geo: null, sources: null, status: "", map: null, layer: null, loadingFor: "" };
+
+function ingredientCategory(name) {
+  // Sauces, gravies and batters are pantry items even if they name a food ("Guinness BBQ sauce").
+  if (/\b(sauce|gravy|batter|dip|dressing|mash|chips|stock|crumbs|panko|flour|sugar|oil|vinegar|spice|seasoning|kraut|sauerkraut|curry)\b/i.test(name)) return "pantry";
+  return PROC_CATS.find((c) => c.words.test(name)).id;
+}
+function procNeeds() {
+  const groups = Object.fromEntries(PROC_CATS.map((c) => [c.id, []]));
+  for (const i of ingredients.values()) {
+    const out = i.on_hand !== null && Number(i.on_hand) === 0, d = daysLeft(i.use_by);
+    groups[ingredientCategory(i.name)].push({ i, out, soon: d !== null && d <= 2 });
+  }
+  for (const k in groups) groups[k].sort((a, b) => b.out - a.out || b.soon - a.soon || a.i.name.localeCompare(b.i.name));
+  return groups;
+}
+function milesBetween(a, b) {
+  const R = 3958.8, rad = (x) => (x * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function procCache(key, val) {
+  if (val === undefined) { try { return JSON.parse(safeGet(key) || "null"); } catch { return null; } }
+  try { safeSet(key, JSON.stringify(val)); } catch { /* storage full: skip */ }
+}
+
+// Leaflet (the map library) loads only when this page is first opened.
+let leafletReady = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (leafletReady) return leafletReady;
+  leafletReady = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
+    js.onload = () => resolve(); js.onerror = () => { leafletReady = null; reject(new Error("map library")); };
+    document.head.appendChild(js);
+  });
+  return leafletReady;
+}
+
+async function geocodeRestaurant(r) {
+  const addr = oneLineAddress(r);
+  const cached = procCache(`line.geo.${r.id}`);
+  if (cached && cached.addr === addr) return cached;
+  const q = new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "us", street: r.address_line1, city: r.city, state: r.state, postalcode: r.postal_code });
+  let hit = null;
+  for (const params of [q, new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "us", postalcode: r.postal_code })]) {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { Accept: "application/json" } });
+    if (!res.ok) continue;
+    const list = await res.json();
+    if (list[0]) { hit = { addr, lat: Number(list[0].lat), lon: Number(list[0].lon), exact: params === q }; break; }
+  }
+  if (hit) procCache(`line.geo.${r.id}`, hit);
+  return hit;
+}
+
+function classifySource(el, home) {
+  const t = el.tags || {}, name = String(t.name || "").trim();
+  const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+  if (!name || lat == null || lon == null) return null;
+  let type, kind;
+  if (new RegExp(DIST_RE.replace(/\\\\/g, "\\"), "i").test(name)) { type = "distributor"; kind = "Distributor"; }
+  else if (t.shop === "wholesale" || new RegExp(CLUB_RE, "i").test(name)) { type = "wholesale"; kind = "Wholesale"; }
+  else if (t.amenity === "marketplace") { type = "local"; kind = "market"; }
+  else if (LOCAL_KINDS[t.shop]) { type = "local"; kind = t.shop; }
+  else return null;
+  const street = [t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" ");
+  return { id: `${el.type}${el.id}`, name, type, kind, lat, lon, miles: milesBetween(home, { lat, lon }),
+    address: [street, t["addr:city"]].filter(Boolean).join(", "), site: t.website || t["contact:website"] || "", phone: t.phone || t["contact:phone"] || "",
+    hours: t.opening_hours || "" };
+}
+
+async function findSources(home, miles) {
+  const key = `line.src.${rest.id}.${miles}`;
+  const cached = procCache(key);
+  if (cached && Date.now() - cached.t < 86400000 && Math.abs(cached.lat - home.lat) < 1e-6 && Math.abs(cached.lon - home.lon) < 1e-6) return cached.list;
+  const m = Math.round(miles * 1609.34), far = Math.max(m, 160934);   // distributors: look out to at least 100 miles
+  const at = `${home.lat.toFixed(6)},${home.lon.toFixed(6)}`;
+  const query = `[out:json][timeout:25];
+(
+  nwr["amenity"="marketplace"]["name"](around:${m},${at});
+  nwr["shop"~"^(farm|butcher|seafood|greengrocer|cheese)$"]["name"](around:${m},${at});
+  nwr["shop"="wholesale"]["name"](around:${m},${at});
+  nwr["name"~"${CLUB_RE}",i](around:${m},${at});
+  nwr["name"~"${DIST_RE}",i](around:${far},${at});
+);
+out center tags 400;`;
+  let data = null;
+  for (const url of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]) {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(query) });
+      if (res.ok) { data = await res.json(); break; }
+    } catch { /* try the next server */ }
+  }
+  if (!data) throw new Error("sources");
+  const seen = new Set(), list = [];
+  for (const el of data.elements || []) {
+    const s = classifySource(el, home);
+    if (!s) continue;
+    const dupe = `${s.name.toLowerCase()}|${s.lat.toFixed(3)}|${s.lon.toFixed(3)}`;
+    if (seen.has(dupe)) continue;
+    seen.add(dupe); list.push(s);
+  }
+  list.sort((a, b) => a.miles - b.miles);
+  procCache(key, { t: Date.now(), lat: home.lat, lon: home.lon, list });
+  return list;
+}
+
+// Which sources fit the chosen ingredient group.
+function procVisible() {
+  const cat = PROC_CATS.find((c) => c.id === proc.cat);
+  return (proc.sources || []).filter((s) => {
+    if (!proc.show.has(s.type)) return false;
+    if (s.type !== "distributor" && s.miles > proc.radius) return false;
+    if (!cat) return true;
+    return s.type === "local" ? cat.from.includes(s.kind) : cat.from.includes(s.type);
+  });
+}
+
+async function renderProcurement() {
+  const el = $("page-procurement");
+  if (!hasAddressCols(rest) || !rest.address_line1) {
+    proc.map?.remove(); proc.map = null;
+    el.innerHTML = `<div class="perf-wrap"><div class="chart-card empty">
+      <h3>Add Your Restaurant's Address First</h3>
+      <p>Procurement maps the places near ${esc(rest.name)} where you can buy what you need. It needs the full street address.</p>
+      ${hasAddressCols(rest) ? `<button class="applybtn" id="procAddAddress" type="button">Add the address in Settings</button>` : `<p>${esc(ADDRESS_SETUP)}</p>`}
+    </div></div>`;
+    return;
+  }
+  const needs = procNeeds();
+  const cats = PROC_CATS.filter((c) => needs[c.id].length);
+  const cat = PROC_CATS.find((c) => c.id === proc.cat);
+  if (proc.cat !== "all" && !cats.some((c) => c.id === proc.cat)) proc.cat = "all";
+  if (!el.querySelector("#procMap")) {
+    proc.map?.remove(); proc.map = null;
+    el.innerHTML = `<div class="perf-wrap proc">
+      <div class="chart-card">
+        <div class="chart-head"><h3>Sourcing Near ${esc(rest.name)}</h3><span class="note" id="procWhere"></span></div>
+        <div class="proc-need-head"><strong>What do you need?</strong><span class="note">Pick a group to see only the places that sell it.</span></div>
+        <div class="proc-cats" id="procCats" role="group" aria-label="Ingredient groups"></div>
+        <p class="proc-detail" id="procDetail"></p>
+        <div class="proc-controls">
+          <label class="inline">Within <select id="procRadius">${[10, 25, 50].map((m) => `<option value="${m}" ${m === proc.radius ? "selected" : ""}>${m} miles</option>`).join("")}</select></label>
+          ${Object.entries(PROC_TYPES).map(([k, v]) => `<label class="proc-toggle"><input type="checkbox" data-proc-type="${k}" ${proc.show.has(k) ? "checked" : ""}><span class="proc-dot" style="background:${v.color}"></span>${v.name}</label>`).join("")}
+          <span class="note" id="procStatus" aria-live="polite"></span>
+        </div>
+      </div>
+      <div class="proc-grid">
+        <div class="chart-card proc-map-card"><div id="procMap" role="region" aria-label="Map of nearby sources"></div>
+          <p class="note proc-credit"><span class="proc-dot proc-home"></span> ${esc(rest.name)} | dashed ring = your distance. Places from OpenStreetMap; hours and details can be out of date, so call before you go.</p></div>
+        <div class="chart-card proc-list-card"><div class="chart-head"><h3>Nearby Sources</h3><span class="note" id="procCount"></span></div><div id="procList"></div></div>
+      </div>
+      <div class="chart-card"><div class="chart-head"><h3>Large Distributors</h3><span class="note">They deliver to restaurants by account, not walk-in</span></div><div id="procChains"></div></div>
+    </div>`;
+  }
+  // Ingredient groups
+  $("procCats").innerHTML = [`<button type="button" class="proc-cat" data-proc-cat="all" aria-pressed="${proc.cat === "all"}">Everything <span>${ingredients.size}</span></button>`,
+    ...cats.map((c) => { const out = needs[c.id].filter((x) => x.out).length;
+      return `<button type="button" class="proc-cat${out ? " has-out" : ""}" data-proc-cat="${c.id}" aria-pressed="${proc.cat === c.id}">${c.name} <span>${needs[c.id].length}</span>${out ? `<b class="proc-out">${out} 86'd</b>` : ""}</button>`; })].join("");
+  if (cat) {
+    const list = needs[cat.id];
+    const where = cat.from.map((k) => (LOCAL_KINDS[k] || PROC_TYPES[k]?.name || k).toLowerCase()).join(", ");
+    $("procDetail").innerHTML = `<strong>${cat.name}:</strong> ${list.slice(0, 8).map((x) => `${esc(x.i.name)}${x.out ? ` <b class="proc-out">86'd</b>` : x.soon ? ` <span class="proc-soon">spoils soon</span>` : ""}`).join(", ")}${list.length > 8 ? `, and ${list.length - 8} more` : ""}.
+      <span class="proc-where">Best bought from: ${esc(where)}.</span>${cat.id === "bar" ? ` <span class="proc-where">Most states require restaurants to buy alcohol from a licensed wholesaler, not a store.</span>` : ""}`;
+  } else {
+    const out = [...ingredients.values()].filter((i) => i.on_hand !== null && Number(i.on_hand) === 0);
+    $("procDetail").innerHTML = out.length ? `<strong>Reorder now:</strong> ${out.map((i) => `${esc(i.name)} <b class="proc-out">86'd</b>`).join(", ")}.` : "Showing every kind of source near you.";
+  }
+  $("procWhere").textContent = oneLineAddress(rest);
+  await procLoad();
+}
+
+async function procLoad() {
+  const status = $("procStatus");
+  const want = `${rest.id}|${oneLineAddress(rest)}|${proc.radius}`;
+  try {
+    await loadLeaflet();
+  } catch { status.textContent = "The map couldn't load. Check your internet connection."; return; }
+  if (!proc.geo || proc.geo.addr !== oneLineAddress(rest) || proc.loadingFor.split("|")[0] !== rest.id) {
+    status.textContent = "Finding your restaurant on the map…";
+    proc.sources = null;
+    try { proc.geo = await geocodeRestaurant(rest); } catch { proc.geo = null; }
+    if (!proc.geo) { status.textContent = "Couldn't find that address on the map. Check it in Settings."; return; }
+  }
+  procDrawMap();
+  if (!proc.sources || proc.loadingFor !== want) {
+    proc.loadingFor = want;
+    status.textContent = "Looking for sources nearby…";
+    $("procBlade")?.classList.remove("hidden");
+    try {
+      const found = await findSources(proc.geo, Math.max(proc.radius, 25));
+      if (proc.loadingFor !== want) return;   // the radius or restaurant changed meanwhile
+      proc.sources = found;
+    } catch {
+      status.textContent = "The places search is busy. Try again in a minute.";
+      return;
+    }
+  }
+  status.textContent = proc.geo.exact ? "" : "Placed by ZIP code; the street address wasn't found.";
+  procDrawSources();
+}
+
+function procDrawMap() {
+  const box = $("procMap");
+  if (!box) return;
+  if (proc.map && proc.map.getContainer() !== box) { proc.map.remove(); proc.map = null; }
+  const home = [proc.geo.lat, proc.geo.lon];
+  if (!proc.map) {
+    proc.map = L.map(box, { scrollWheelZoom: false }).setView(home, 11);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+      maxZoom: 19, subdomains: "abcd",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    }).addTo(proc.map);
+    proc.layer = L.layerGroup().addTo(proc.map);
+  }
+  setTimeout(() => proc.map?.invalidateSize(), 0);
+}
+
+function procDrawSources() {
+  if (!proc.map) return;
+  const home = [proc.geo.lat, proc.geo.lon], list = procVisible();
+  proc.layer.clearLayers();
+  const circle = L.circle(home, { radius: proc.radius * 1609.34, color: "#163829", weight: 1, opacity: 0.4, fill: false, dashArray: "6 6" }).addTo(proc.layer);
+  const label = (s) => (s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind);
+  for (const s of list) {
+    L.circleMarker([s.lat, s.lon], { radius: 7, color: "#FFFFFF", weight: 2, fillColor: PROC_TYPES[s.type].color, fillOpacity: 1 })
+      .bindPopup(`<strong>${esc(s.name)}</strong><br>${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? `<br>${esc(s.address)}` : ""}${s.hours ? `<br>Hours: ${esc(s.hours)}` : ""}<br><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>`)
+      .addTo(proc.layer);
+  }
+  // The restaurant goes on last so it's never hidden under a source next door.
+  L.circleMarker(home, { radius: 11, color: "#B8902C", weight: 4, fillColor: "#163829", fillOpacity: 1 })
+    .bindTooltip(`<strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}`, { permanent: false }).addTo(proc.layer);
+  const nearby = list.filter((s) => s.miles <= proc.radius);
+  proc.map.fitBounds(nearby.length ? L.latLngBounds([home, ...nearby.map((s) => [s.lat, s.lon])]).pad(0.15) : circle.getBounds(), { maxZoom: 13 });
+  $("procCount").textContent = `${list.length} ${list.length === 1 ? "place" : "places"}`;
+  $("procList").innerHTML = list.length ? `<ul class="proc-list">${list.slice(0, 60).map((s) => `<li>
+      <span class="proc-dot" style="background:${PROC_TYPES[s.type].color}"></span>
+      <div><button type="button" class="proc-name" data-proc-go="${s.id}">${esc(s.name)}</button>
+      <div class="proc-meta">${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? ` | ${esc(s.address)}` : ""}</div>
+      <div class="proc-links"><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.site ? ` <a href="${esc(s.site)}" target="_blank" rel="noopener">Website</a>` : ""}${s.phone ? ` <a href="tel:${esc(s.phone.replace(/[^\d+]/g, ""))}">${esc(s.phone)}</a>` : ""}</div></div></li>`).join("")}</ul>`
+    : `<p class="ms-empty">No ${proc.cat === "all" ? "" : PROC_CATS.find((c) => c.id === proc.cat).name.toLowerCase() + " "}sources found within ${proc.radius} miles. Try a wider distance.</p>`;
+  // Large distributors: nearest warehouse on the map, or how to reach them.
+  $("procChains").innerHTML = `<div class="proc-chains">${CHAINS.map((c) => {
+    const near = (proc.sources || []).filter((s) => s.type === "distributor" && c.match.test(s.name)).sort((a, b) => a.miles - b.miles)[0];
+    return `<div class="proc-chain"><strong>${c.name}</strong>
+      <span>${near ? `Nearest warehouse: ${esc(near.name)}, ${near.miles.toFixed(0)} mi` : "No warehouse on the map within 100 miles. Most deliver across a region; ask for a sales rep."}</span>
+      <a href="${c.site}" target="_blank" rel="noopener">Set up an account</a></div>`; }).join("")}</div>`;
+}
+function procDirections(s) {
+  return `https://www.google.com/maps/dir/?api=1&origin=${proc.geo.lat},${proc.geo.lon}&destination=${s.lat},${s.lon}`;
+}
+function procFocus(id) {
+  const s = (proc.sources || []).find((x) => x.id === id);
+  if (!s || !proc.map) return;
+  proc.map.setView([s.lat, s.lon], 14);
+  proc.layer.eachLayer((m) => { const ll = m.getLatLng?.(); if (ll && ll.lat === s.lat && ll.lng === s.lon && m.openPopup) m.openPopup(); });
+  $("procMap").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // ---------------------------------------------------------- Tonight
@@ -3524,6 +3823,19 @@ function wireControls() {
   darkQuery?.addEventListener?.("change", applyTheme);
   $("signOutBtn").addEventListener("click", () => { closeMenu(); signOut(); });
   $("settingsBtn").addEventListener("click", () => { closeMenu(); openSettings(); });
+
+  // Procurement
+  $("page-procurement").addEventListener("click", (e) => {
+    if (e.target.closest("#procAddAddress")) { openSettings(); return; }
+    const c = e.target.closest("[data-proc-cat]");
+    if (c) { proc.cat = c.dataset.procCat; renderProcurement(); return; }
+    const go = e.target.closest("[data-proc-go]");
+    if (go) procFocus(go.dataset.procGo);
+  });
+  $("page-procurement").addEventListener("change", (e) => {
+    if (e.target.id === "procRadius") { proc.radius = Number(e.target.value); renderProcurement(); }
+    else if (e.target.dataset.procType) { e.target.checked ? proc.show.add(e.target.dataset.procType) : proc.show.delete(e.target.dataset.procType); if (proc.sources) procDrawSources(); }
+  });
   $("restaurantSelect").addEventListener("change", (e) => {
     const v = e.target.value;
     if ((draftDirty || modDirty) && !confirm("You have unsaved changes. Switch anyway?")) { e.target.value = rest.id; return; }

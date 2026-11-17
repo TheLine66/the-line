@@ -216,6 +216,7 @@ This makes sure any email links (for example, password resets) send people to yo
 | **Recipes** | Add a dish, change its price, or add and remove ingredients, then click **Save dish** |
 | **Labor Costs** *(put away for now: set `LABOR_ON = true` near the top of the page list in `app.js` to bring it back)* | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
 | **MOD Report** | The manager on duty fills one in every shift: weather, covers by hour (peak times are highlighted), staffing, employee and guest issues, comps and voids, 86'd items, maintenance, cash and closing checks, tomorrow's forecast, and notes. **Print / save as PDF** makes a clean copy to share. |
+| **Procurement** | A map of where to buy around the restaurant's address (needs the address in Settings): large distributors like Sysco and US Foods, wholesale clubs like Costco, and local farmers markets, farm stands, butchers, seafood and produce shops. Pick an ingredient group (produce, meat, seafood…) to see only the places that sell it; 86'd and spoiling items are flagged. Places come from OpenStreetMap (free, no key), so call ahead before you go. |
 
 **The what-if bar** (on Cost Tracker and Performance) works like it did in your prototype. You can now also click **Save** to keep a scenario like "Beef +15%", and reload it later from the **Saved scenarios** menu.
 
