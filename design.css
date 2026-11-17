@@ -810,3 +810,37 @@ fieldset.addr legend { padding: 0; margin-bottom: 4px; font-size: 14px; font-wei
 .proc-dot.proc-home { width: 14px; height: 14px; background: #163829; border: 3px solid #B8902C; box-shadow: none; vertical-align: -2px; }
 .proc-msg { font-size: 15px; line-height: 1.5; margin: 4px 0 12px; }
 .proc-why { margin-top: 14px; font-size: 12.5px; } .proc-why summary { cursor: pointer; font-weight: 700; } .proc-why ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.5; word-break: break-word; }
+
+/* Procurement: smartest places to buy and the price book */
+.pp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pp-msg { font-size: 14px; line-height: 1.5; padding: 10px 14px; border-left: 4px solid var(--watch-dot); background: var(--surface); margin: 4px 0 14px; }
+.pp-msg a { color: var(--link, var(--green)); }
+.pp-total { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 20px; margin: 4px 0 14px; }
+.pp-total > div { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 15px; font-weight: 600; }
+.pp-big { font-size: 34px; font-weight: 700; color: var(--good); }
+.pp-total p { margin: 0; font-size: 13.5px; }
+table.pp-plan, table.pp-book { width: 100%; border-collapse: collapse; font-size: 14px; }
+.pp-plan th, .pp-book th { text-align: left; font-size: 12.5px; font-weight: 700; padding: 0 10px 8px 0; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+.pp-plan td, .pp-book td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.pp-plan .num, .pp-book .num { text-align: right; white-space: nowrap; }
+.pp-save { color: var(--good); font-weight: 700; }
+.pp-conf { letter-spacing: 2px; color: var(--green); white-space: nowrap; }
+.pp-why { font-size: 13px; min-width: 200px; }
+.pp-sub { font-size: 12.5px; }
+.pp-checks { margin-top: 16px; padding: 12px 16px; border: 1px solid var(--line); border-left: 4px solid var(--watch-dot); border-radius: 6px; }
+.pp-checks h4 { margin: 0 0 6px; font-family: var(--serif); font-size: 17px; }
+.pp-checks ol { margin: 0; padding-left: 20px; }
+.pp-checks li { padding: 5px 0; font-size: 14px; line-height: 1.45; }
+.pp-checks li .linkbtn { margin-left: 8px; }
+.pp-how { margin-top: 14px; font-size: 13px; line-height: 1.5; }
+.pp-how summary, .pp-more summary, .pp-all summary { cursor: pointer; font-weight: 700; }
+.pp-src { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--good-bg); color: var(--good); margin-left: 4px; }
+.pp-src.estimate { background: var(--watch-bg); color: var(--watch); }
+.pp-all { margin-top: 4px; font-size: 13px; }
+.pp-all ul { margin: 4px 0 0; padding-left: 16px; }
+.pp-addbtn { padding: 5px 10px; font-size: 13px; white-space: nowrap; }
+.pp-adding td { border-bottom: none; }
+.pp-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 4px 0 6px; }
+.pp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 700; }
+.pp-form input, .pp-form select { min-width: 140px; }
+.pp-more { margin-top: 12px; font-size: 14px; }

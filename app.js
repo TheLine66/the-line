@@ -1199,8 +1199,14 @@ async function renderProcurement() {
         <div class="chart-card proc-list-card"><div class="chart-head"><h3>Nearby Sources</h3><span class="note" id="procCount"></span></div><div id="procList"></div></div>
       </div>
       <div class="chart-card"><div class="chart-head"><h3>Large Distributors</h3><span class="note">They deliver to restaurants by account, not walk-in</span></div><div id="procChains"></div></div>
+      <div id="procPricing"></div>
     </div>`;
   }
+  // The price book loads alongside the map; the first time, Gemini fills in typical prices.
+  loadPriceBook().then(() => {
+    renderPricing();
+    if (priceBook.ready === true && !priceBook.points.some((p) => p.source === "estimate") && weeklyUse().size) estimatePrices(true);
+  });
   $("procCats").innerHTML = [`<button type="button" class="proc-cat" data-proc-cat="all" aria-pressed="${proc.cat === "all"}">Everything <span>${ingredients.size}</span></button>`,
     ...cats.map((c) => { const out = needs[c.id].filter((x) => x.out).length;
       return `<button type="button" class="proc-cat${out ? " has-out" : ""}" data-proc-cat="${c.id}" aria-pressed="${proc.cat === c.id}">${c.name} <span>${needs[c.id].length}</span>${out ? `<b class="proc-out">${out} 86'd</b>` : ""}</button>`; })].join("");
@@ -1308,6 +1314,7 @@ function procDrawSources() {
     return `<div class="proc-chain"><strong>${c.name}</strong>
       <span>${near ? `Nearest location: ${esc(near.name)}, ${near.miles.toFixed(0)} mi` : "No location found within 100 miles. Most deliver across a region; ask for a sales rep."}</span>
       <a href="${c.site}" target="_blank" rel="noopener">Set up an account</a></div>`; }).join("")}</div>`;
+  renderPricing();
 }
 function procClearPins() { proc.pins.forEach((p) => p.setMap(null)); proc.pins = []; }
 function procOpen(s, marker) {
@@ -1324,6 +1331,312 @@ function procFocus(id) {
   proc.map.setCenter({ lat: s.lat, lng: s.lon }); proc.map.setZoom(14);
   procOpen(s, s.pin);
   $("procMap").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// ---------------------------------------------------------- Price book & smartest places to buy
+// Every price The Line learns goes in the price book (supabase/prices.sql):
+// real prices from scanned invoices and receipts, quotes the owner types in,
+// and typical-price estimates from Gemini with Google Search to fill gaps.
+// The buying plan compares, for each food group, the true weekly cost of
+// buying it at each kind of place: price x what you use a week, plus the trip
+// (miles and staff time) for places you drive to, plus a spoilage allowance
+// for perishables bought in big packs. It shows how sure it is: real prices
+// count more than estimates.
+const PLAN = {
+  milesCost: 0.70,          // $ per mile driven (about the IRS mileage rate)
+  mph: 30,                  // average driving speed in town
+  shopMinutes: 30,          // time in the store
+  wage: 18,                 // $ per hour for whoever does the run
+  tripsPerWeek: 1,
+  spoil: { distributor: 0.02, wholesale: 0.08, local: 0 },   // extra waste from pack sizes, perishables only
+  perishable: new Set(["produce", "seafood", "meat", "dairy", "bakery"]),
+  estimateDays: 14,         // estimates older than this get looked up again
+};
+let priceBook = { rid: null, ready: null, points: [], estimating: false, addFor: null, msg: "" };
+
+function supplierType(name) {
+  const n = String(name || "");
+  if (/gordon food service store|gfs store|costco|sam'?s club|restaurant depot|bj'?s wholesale|smart ?& ?final|chef'?store|jetro|webstaurant/i.test(n)) return "wholesale";
+  if (/sysco|us ?foods|performance food|gordon food|\bgfs\b|reinhart|ben e\.? ?keith|shamrock foods|cheney|chefs'? warehouse/i.test(n)) return "distributor";
+  if (/farm|market|butcher|seafood|fish|produce|creamery|dairy|bakery|orchard|grocer|cheese/i.test(n)) return "local";
+  return "other";
+}
+const BRANDS = ["costco", "sam's club", "restaurant depot", "bj's", "sysco", "us foods", "performance food", "gordon food"];
+function brandOf(name) {
+  const n = String(name || "").toLowerCase().replace(/’/g, "'");
+  return BRANDS.find((b) => n.includes(b)) || n.trim();
+}
+
+async function loadPriceBook() {
+  if (priceBook.rid === rest.id && priceBook.ready !== null) return;
+  priceBook = { rid: rest.id, ready: null, points: [], estimating: false, addFor: null, msg: "" };
+  const res = await sb.from("price_points").select("*").eq("restaurant_id", rest.id).order("observed_on", { ascending: false }).order("created_at", { ascending: false });
+  if (res.error) { priceBook.ready = isMissingTable(res.error) ? false : null; if (priceBook.ready === null) priceBook.msg = esc(friendlyError(res.error)); return; }
+  priceBook.ready = true;
+  priceBook.points = res.data.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) }));
+}
+
+// How much of each ingredient a week, from the latest week of sales x recipes.
+function weeklyUse() {
+  const week = sortedWeeks()[0], units = week ? salesByWeek.get(week) : null, use = new Map();
+  if (!units) return use;
+  for (const d of dishes) {
+    const u = units.get(d.id) || 0;
+    if (!u) continue;
+    for (const it of d.items) use.set(it.ingredient_id, (use.get(it.ingredient_id) || 0) + u * it.qty);
+  }
+  return use;
+}
+
+// The newest price for an ingredient that passes a test.
+function latestPrice(ingId, test) {
+  return priceBook.points.find((p) => p.ingredient_id === ingId && test(p)) || null;
+}
+const isReal = (p) => p.source !== "estimate";
+
+// Trip cost for one run to a place this many miles away.
+function tripCost(miles) {
+  const rt = miles * 2;
+  return PLAN.tripsPerWeek * (rt * PLAN.milesCost + ((rt / PLAN.mph) * 60 + PLAN.shopMinutes) / 60 * PLAN.wage);
+}
+
+function buildPlan() {
+  const use = weeklyUse();
+  const near = (test) => (proc.sources || []).filter(test).sort((a, b) => a.miles - b.miles)[0] || null;
+  const realWholesale = priceBook.points.filter((p) => isReal(p) && p.supplier_type === "wholesale");
+  // The wholesale clubs to compare: the nearest location of every club you have real prices from, plus the nearest club.
+  const clubs = [...new Set(realWholesale.map((p) => brandOf(p.supplier)))]
+    .map((brand) => near((s) => s.type === "wholesale" && brandOf(s.name) === brand))
+    .concat([near((s) => s.type === "wholesale")]).filter(Boolean)
+    .filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i).slice(0, 4);
+  const distName = (priceBook.points.find((p) => isReal(p) && p.supplier_type === "distributor") || {}).supplier;
+  const rows = [], checks = [];
+  let totalNow = 0, totalPlan = 0;
+  for (const cat of PROC_CATS) {
+    const items = [...ingredients.values()].filter((i) => ingredientCategory(i.name) === cat.id && (use.get(i.id) || 0) > 0);
+    if (!items.length) continue;
+    const now = items.reduce((t, i) => t + use.get(i.id) * i.cost, 0);
+    const local = cat.from.some((k) => LOCAL_KINDS[k]) ? near((s) => s.type === "local" && cat.from.includes(s.kind)) : null;
+    const options = [
+      { key: "distributor", name: distName || "A distributor (Sysco, US Foods)", delivered: true, miles: 0, test: (p) => p.supplier_type === "distributor" },
+      ...(cat.from.includes("wholesale") ? clubs : []).map((club) => ({ key: "wholesale", name: club.name, miles: club.miles, test: (p) => p.supplier_type === "wholesale" && (p.source === "estimate" || brandOf(p.supplier) === brandOf(club.name)) })),
+      local ? { key: "local", name: local.name, miles: local.miles, test: (p) => p.supplier_type === "local" } : null,
+    ].filter(Boolean);
+    for (const o of options) {
+      let goods = 0, priced = 0, real = 0;
+      o.lines = items.map((i) => {
+        const q = use.get(i.id), base = q * i.cost;
+        const r = latestPrice(i.id, (p) => isReal(p) && o.test(p));
+        const fresh = (p) => p.source === "estimate" && daysLeft(addDays(p.observed_on, 60)) >= 0;   // estimates count for 60 days
+        const e = r ? null : latestPrice(i.id, (p) => fresh(p) && o.test(p) && p.supplier.startsWith("Typical"));
+        const p = r || e;
+        goods += p ? q * p.unit_cost : base;
+        if (p) priced += base;
+        if (r) real += base;
+        return { i, q, price: p };
+      });
+      o.goods = goods;
+      o.spoil = PLAN.perishable.has(cat.id) ? goods * PLAN.spoil[o.key] : 0;
+      o.cost = goods + o.spoil;
+      o.pricedShare = now ? priced / now : 0;
+      o.realShare = now ? real / now : 0;
+    }
+    const usable = options.filter((o) => o.pricedShare >= 0.5);
+    rows.push({ cat, now, items, options, usable });
+    // Price checks: an estimate says it's cheaper somewhere, but there's no real price there yet.
+    for (const o of options) for (const l of o.lines) {
+      if (!l.price || l.price.source !== "estimate") continue;
+      const save = l.q * (l.i.cost - l.price.unit_cost);
+      if (save >= 3) checks.push({ i: l.i, where: o.name, key: o.key, est: l.price.unit_cost, save });
+    }
+  }
+  // Pick the cheapest option per group, then make sure each trip pays for itself.
+  for (const r of rows) {
+    r.pick = [...r.usable].sort((a, b) => a.cost - b.cost)[0] || null;
+    if (r.pick && r.pick.cost >= r.now) r.pick = null;          // nothing beats what you pay now
+  }
+  const byPlace = new Map();
+  for (const r of rows) if (r.pick && !r.pick.delivered) {
+    const k = r.pick.name;
+    if (!byPlace.has(k)) byPlace.set(k, { miles: r.pick.miles, rows: [] });
+    byPlace.get(k).rows.push(r);
+  }
+  for (const [, g] of byPlace) {
+    g.trip = tripCost(g.miles);
+    const save = g.rows.reduce((t, r) => t + (r.now - r.pick.cost), 0);
+    if (save <= g.trip) {               // the drive costs more than it saves: fall back to delivery or staying put
+      for (const r of g.rows) { const d = r.usable.find((o) => o.delivered); r.pick = d && d.cost < r.now ? d : null; r.tripDropped = true; }
+    } else for (const r of g.rows) r.trip = g.trip * ((r.now - r.pick.cost) / save);   // share the trip by savings
+  }
+  for (const r of rows) {
+    r.planCost = r.pick ? r.pick.cost + (r.trip || 0) : r.now;
+    totalNow += r.now; totalPlan += r.planCost;
+  }
+  checks.sort((a, b) => b.save - a.save);
+  const seen = new Set();
+  return { rows, totalNow, totalPlan, checks: checks.filter((c) => !seen.has(c.i.id) && seen.add(c.i.id)).slice(0, 3), hasSales: use.size > 0 };
+}
+
+const dots = (share) => (share >= 0.6 ? "●●●" : share > 0.15 ? "●●○" : "●○○");
+const sourceWord = { invoice: "Invoice", receipt: "Receipt", quote: "Quote", estimate: "Estimate" };
+
+function renderPricing() {
+  const el = $("procPricing");
+  if (!el) return;
+  if (priceBook.ready === false) {
+    el.innerHTML = `<div class="chart-card"><div class="chart-head"><h3>Smartest Places to Buy</h3></div>
+      <p>One more database step: in Supabase, open <strong>SQL Editor</strong> → <strong>New query</strong>, paste in everything from <code>supabase/prices.sql</code>, click <strong>Run</strong>, then reload this page. That adds the price book this page learns prices into.</p></div>`;
+    return;
+  }
+  if (priceBook.ready !== true) { el.innerHTML = ""; return; }
+  const plan = buildPlan(), use = weeklyUse();
+  const save = plan.totalNow - plan.totalPlan;
+  const anyReal = priceBook.points.some(isReal);
+  const planRows = plan.rows.map((r) => {
+    const p = r.pick, by = p ? p.name : "Where you buy now";
+    const why = p
+      ? `${fmt0(r.now - r.planCost)} less a week${p.delivered ? ", delivered" : ` after a ${Math.round(p.miles * 2)}-mile round trip`}${p.spoil ? `, with ${Math.round(PLAN.spoil[p.key] * 100)}% extra for bigger packs` : ""}.`
+      : r.tripDropped ? "A cheaper place is too far to be worth the drive." : r.usable.length ? "You already pay the best price we know of." : "Not enough prices yet to compare.";
+    return `<tr><td><strong>${r.cat.name}</strong></td><td>${esc(by)}${p && !p.delivered ? `<div class="pp-sub">${p.miles.toFixed(1)} mi</div>` : ""}</td>
+      <td class="num mono">${fmt0(r.now)}</td><td class="num mono">${fmt0(r.planCost)}</td>
+      <td class="num mono ${r.now - r.planCost > 0.5 ? "pp-save" : ""}">${r.now - r.planCost > 0.5 ? fmt0(r.now - r.planCost) : "—"}</td>
+      <td class="pp-conf" title="How sure: ●●● mostly your real prices, ●●○ some, ●○○ estimates only">${p ? dots(p.realShare) : ""}</td>
+      <td class="pp-why">${why}</td></tr>`;
+  }).join("");
+  const checks = plan.checks.length ? `<div class="pp-checks"><h4>Price Checks Worth Doing</h4><ol>${plan.checks.map((c) => `<li>
+      <span>Check <strong>${esc(c.i.name)}</strong> at <strong>${esc(c.where)}</strong> next time: estimated ${fmt(c.est)} vs. ${fmt(c.i.cost)} now per ${esc(c.i.unit)}. Could save about <strong>${fmt0(c.save)} a week</strong>.</span>
+      <button class="linkbtn" type="button" data-pp-add="${c.i.id}" data-pp-where="${esc(c.where)}">Add the price</button></li>`).join("")}</ol></div>` : "";
+  // Price book: ingredients by weekly spend
+  const list = [...ingredients.values()].map((i) => ({ i, q: use.get(i.id) || 0 })).sort((a, b) => b.q * b.i.cost - a.q * a.i.cost || a.i.name.localeCompare(b.i.name));
+  const nearbyNames = [...new Set([...(proc.sources || []).map((s) => s.name), ...priceBook.points.filter(isReal).map((p) => p.supplier)])];
+  const bookRow = ({ i, q }) => {
+    const pts = priceBook.points.filter((p) => p.ingredient_id === i.id);
+    const bySupplier = new Map();
+    for (const p of pts) if (!bySupplier.has(p.supplier)) bySupplier.set(p.supplier, p);   // newest per place
+    const best = [...bySupplier.values()].sort((a, b) => a.unit_cost - b.unit_cost)[0];
+    const adding = priceBook.addFor === i.id;
+    return `<tr${adding ? ' class="pp-adding"' : ""}><td><strong>${esc(i.name)}</strong><div class="pp-sub">${ingredientCategoryName(i.name)}</div></td>
+      <td class="num mono">${q ? `${trimNum(Math.round(q * 10) / 10)} ${esc(i.unit)}` : "—"}</td>
+      <td class="num mono">${fmt(i.cost)}</td>
+      <td>${best ? `<span class="mono">${fmt(best.unit_cost)}</span> at ${esc(best.supplier)} <span class="pp-src ${best.source}">${sourceWord[best.source]}, ${fmtDay(best.observed_on)}</span>` : `<span class="pp-sub">No prices yet</span>`}
+        ${bySupplier.size > 1 ? `<details class="pp-all"><summary>All ${bySupplier.size} places</summary><ul>${[...bySupplier.values()].sort((a, b) => a.unit_cost - b.unit_cost).map((p) => `<li><span class="mono">${fmt(p.unit_cost)}</span> ${esc(p.supplier)} <span class="pp-src ${p.source}">${sourceWord[p.source]}, ${fmtDay(p.observed_on)}</span>${p.low_cost && p.high_cost ? ` <span class="pp-sub">(usually ${fmt(p.low_cost)}–${fmt(p.high_cost)})</span>` : ""}</li>`).join("")}</ul></details>` : ""}</td>
+      <td class="num"><button class="ghostbtn dark pp-addbtn" type="button" data-pp-add="${i.id}">+ Price</button></td></tr>
+      ${adding ? `<tr class="pp-form-row"><td colspan="5"><form class="pp-form" data-pp-form="${i.id}">
+        <label>Place<input name="where" list="ppPlaces" maxlength="120" required value="${esc(priceBook.addWhere || "")}" placeholder="e.g. Costco Wholesale"></label>
+        <label>Price per ${esc(i.unit)} ($)<input name="price" type="number" min="0" step="0.0001" required class="mono"></label>
+        <label>Date<input name="date" type="date" value="${dayStr(new Date())}" required></label>
+        <label>Kind<select name="source"><option value="quote">Quote or shelf price</option><option value="receipt">From a receipt</option><option value="invoice">From an invoice</option></select></label>
+        <button class="applybtn" type="submit">Save price</button><button class="linkbtn" type="button" data-pp-cancel>Cancel</button>
+        <span class="pp-sub">Tip: a case price? Divide by how many ${esc(i.unit)} are in the case.</span></form></td></tr>` : ""}`;
+  };
+  const top = list.filter((x) => x.q > 0), rest_ = list.filter((x) => !x.q);
+  el.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-head"><h3>Smartest Places to Buy</h3>
+        <div class="pp-actions">${priceBook.points.length ? "" : `<button class="ghostbtn dark" id="ppSample" type="button">Fill sample prices (demo)</button>`}
+          <button class="ghostbtn dark" id="ppEstimate" type="button" ${priceBook.estimating ? "disabled" : ""}>${priceBook.estimating ? "Looking up prices…" : "Estimate missing prices"}</button></div></div>
+      ${priceBook.msg ? `<p class="pp-msg">${priceBook.msg}</p>` : ""}
+      ${!plan.hasSales ? `<p>Enter a week on <strong>Weekly Sales</strong> first. The plan needs to know how much of each ingredient you use.</p>` : `
+      <div class="pp-total"><div><span class="pp-big mono">${save > 0.5 ? fmt0(save) : "$0"}</span><span>could be saved each week${save > 0.5 ? ` (about ${fmt0(save * 52)} a year)` : ""}</span></div>
+        <p>${anyReal ? "Based on your invoices and quotes, with estimates filling the gaps." : "Based on estimates so far. Scan invoices and receipts, or add a few prices, to make it sharper."}</p></div>
+      <div class="scroll-x"><table class="pp-plan"><thead><tr><th>Food group</th><th>Buy at</th><th class="num">Now / week</th><th class="num">Plan / week</th><th class="num">Saves</th><th>How sure</th><th>Why</th></tr></thead><tbody>${planRows}</tbody></table></div>
+      ${checks}
+      <details class="pp-how"><summary>How this is figured</summary><p>For each food group: what you use a week (your recipes × last week's sales) × the price at each kind of place. Places you drive to add ${fmt(PLAN.milesCost)} a mile and ${fmt(PLAN.wage)} an hour of staff time for the round trip and ${PLAN.shopMinutes} minutes in the store, once a week, shared across everything bought there; a trip that costs more than it saves isn't suggested. Perishables bought at a warehouse club add ${Math.round(PLAN.spoil.wholesale * 100)}% for the bigger packs going bad (${Math.round(PLAN.spoil.distributor * 100)}% for distributor cases). Real prices (invoices, receipts, quotes) always win over estimates; a group needs prices for at least half of its spending before a place is compared.</p></details>`}
+    </div>
+    <div class="chart-card">
+      <div class="chart-head"><h3>Price Book</h3><span class="note">Every price The Line has seen, newest first. Scanned invoices add theirs on their own.</span></div>
+      <datalist id="ppPlaces">${nearbyNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+      <div class="scroll-x"><table class="pp-book"><thead><tr><th>Ingredient</th><th class="num">Used / week</th><th class="num">Paying now</th><th>Best price found</th><th></th></tr></thead>
+        <tbody>${top.map(bookRow).join("")}</tbody></table></div>
+      ${rest_.length ? `<details class="pp-more"><summary>${rest_.length} ingredients not in last week's sales</summary><div class="scroll-x"><table class="pp-book"><tbody>${rest_.map(bookRow).join("")}</tbody></table></div></details>` : ""}
+    </div>`;
+}
+function ingredientCategoryName(name) { return PROC_CATS.find((c) => c.id === ingredientCategory(name)).name; }
+
+async function addPricePoints(rows) {
+  if (!rows.length) return;
+  const saved = await run(sb.from("price_points").insert(rows).select("*"));
+  priceBook.points = [...saved.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) })), ...priceBook.points]
+    .sort((a, b) => String(b.observed_on).localeCompare(String(a.observed_on)));
+}
+
+async function savePriceForm(form) {
+  const ing = ingredients.get(form.dataset.ppForm), f = new FormData(form);
+  const where = String(f.get("where") || "").trim(), price = Number(f.get("price"));
+  if (!ing || !where || !Number.isFinite(price) || price < 0) { toast("Add the place and a price of 0 or more.", "err"); return; }
+  const placed = (proc.sources || []).find((s) => s.name.toLowerCase() === where.toLowerCase());
+  try {
+    await addPricePoints([{ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: where, supplier_type: placed ? placed.type : supplierType(where),
+      unit: ing.unit, unit_cost: price, source: String(f.get("source")), observed_on: String(f.get("date")) || dayStr(new Date()) }]);
+    priceBook.addFor = null; priceBook.addWhere = "";
+    renderPricing();
+    toast(`Saved: ${ing.name} at ${where}.`);
+  } catch { /* toast shown */ }
+}
+
+// After a scanned invoice or receipt is added: remember what was paid where.
+async function logInvoicePrices(draft, rows) {
+  if (priceBook.ready === false) return;
+  const supplier = String(draft.supplier || "").trim() || "Supplier on a scanned invoice";
+  const type = supplierType(supplier);
+  const out = [];
+  for (const x of rows) {
+    const ing = [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).trim().toLowerCase());
+    if (!ing || !(Number(x.cost) >= 0)) continue;
+    out.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier, supplier_type: type, unit: ing.unit, unit_cost: Number(x.cost),
+      source: type === "wholesale" || type === "local" ? "receipt" : "invoice", observed_on: draft.date || dayStr(new Date()) });
+  }
+  try { await addPricePoints(out); } catch { /* the ingredients still saved */ }
+}
+
+// Gemini looks up typical prices for the ingredients you spend the most on.
+async function estimatePrices(auto = false) {
+  if (priceBook.estimating || priceBook.ready !== true) return;
+  const use = weeklyUse(), fresh = (p) => p.source === "estimate" && daysLeft(addDays(p.observed_on, PLAN.estimateDays)) >= 0;
+  const need = [...ingredients.values()].filter((i) => (use.get(i.id) || 0) > 0 && !priceBook.points.some((p) => p.ingredient_id === i.id && fresh(p)))
+    .sort((a, b) => use.get(b.id) * b.cost - use.get(a.id) * a.cost).slice(0, 25);
+  if (!need.length) { if (!auto) { priceBook.msg = "Every ingredient you use already has a recent estimate."; renderPricing(); } return; }
+  priceBook.estimating = true; priceBook.msg = `Looking up typical prices near ${esc(rest.city || "you")} for ${need.length} ingredients. This takes about 30 seconds…`; renderPricing();
+  try {
+    const { data } = await sb.auth.getSession();
+    const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+      body: JSON.stringify({ action: "prices", where: [rest.city, rest.state].filter(Boolean).join(", "), today: dayStr(new Date()), items: need.map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }) });
+    const out = await r.json().catch(() => ({}));
+    if (r.status === 503 || r.status === 404) { priceBook.msg = "Price estimates use the Gemini helper, which isn't connected yet (see the README's Specials section)."; return; }
+    if (!r.ok) { priceBook.msg = esc(out.error || "Couldn't look up prices. Try again."); return; }
+    const names = { distributor: "Typical distributor", wholesale: "Typical wholesale club", local: "Typical farmers market" };
+    const rows = [];
+    for (const x of out.items || []) {
+      const ing = need.find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
+      if (!ing) continue;
+      for (const k of ["distributor", "wholesale", "local"]) if (x[k]?.price > 0) rows.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: names[k], supplier_type: k,
+        unit: ing.unit, unit_cost: x[k].price, low_cost: x[k].low, high_cost: x[k].high, source: "estimate", observed_on: dayStr(new Date()), note: [x.note, ...(out.sources || []).slice(0, 2).map((s) => s.uri)].filter(Boolean).join(" | ").slice(0, 500) });
+    }
+    await addPricePoints(rows);
+    priceBook.msg = `Added ${rows.length} estimated prices for ${new Set(rows.map((r) => r.ingredient_id)).size} ingredients${out.sources?.length ? `, checked with Google Search (${out.sources.slice(0, 3).map((s) => `<a href="${esc(s.uri)}" target="_blank" rel="noopener">${esc(s.title || "source")}</a>`).join(", ")})` : ""}. Estimates are a starting point: real prices from invoices, receipts and quotes replace them.`;
+  } catch { priceBook.msg = "Couldn't reach the price lookup. Check your internet and try again."; }
+  finally { priceBook.estimating = false; renderPricing(); }
+}
+
+// Demo only: a believable price history for a sample restaurant.
+async function fillSamplePrices() {
+  const day = (n) => addDays(dayStr(new Date()), -n);
+  const club = proc.sources?.find((s) => s.type === "wholesale")?.name || "Costco Wholesale";
+  const fish = proc.sources?.find((s) => s.type === "local" && s.kind === "seafood")?.name || "Local seafood market";
+  const market = proc.sources?.find((s) => s.type === "local" && s.kind === "market")?.name || "Farmers market";
+  const rows = [];
+  const add = (i, supplier, type, cost, source, ago) => rows.push({ restaurant_id: rest.id, ingredient_id: i.id, item_name: i.name, supplier, supplier_type: type, unit: i.unit,
+    unit_cost: Math.round(cost * 10000) / 10000, source, observed_on: day(ago), note: "Sample price for the demo" });
+  for (const i of ingredients.values()) add(i, "Sysco", "distributor", i.cost, "invoice", 9);
+  const club_ = { wing: 0.82, chuck: 0.88, potato: 0.78, cheddar: 0.85, cream: 0.9, egg: 0.8, bacon: 0.9, lemon: 0.75 };
+  const local_ = { tomato: 1.25, lettuce: 1.2, leek: 1.1, chive: 1.15 };
+  for (const i of ingredients.values()) {
+    const n = i.name.toLowerCase();
+    for (const [w, f] of Object.entries(club_)) if (n.includes(w)) add(i, club, "wholesale", i.cost * f, "quote", 5);
+    for (const [w, f] of Object.entries(local_)) if (n.includes(w)) add(i, market, "local", i.cost * f, "quote", 3);
+    if (/\bcod\b/.test(n)) add(i, fish, "local", i.cost * 0.94, "quote", 4);
+  }
+  try { await addPricePoints(rows); priceBook.msg = `Added ${rows.length} sample prices: last week's Sysco invoice for everything, plus a few quotes from ${esc(club)}, ${esc(market)} and ${esc(fish)}.`; renderPricing(); } catch { /* toast shown */ }
 }
 
 // ---------------------------------------------------------- Tonight
@@ -1804,7 +2117,10 @@ async function saveInvoice() {
       else { delete change.updated_at; await run(sb.from("ingredients").insert({ restaurant_id: rest.id, name: String(x.name).trim(), unit: String(x.unit).trim(), ...change })); added++; }
     }
     await loadRestaurantData();
+    const draft = invoiceDraft;
     invoiceDraft = null;
+    await loadPriceBook();
+    await logInvoicePrices(draft, rows);       // remember what was paid where, for Procurement
     render();
     toast(`From the invoice: ${updated} updated, ${added} added.`);
   } catch { btn.disabled = false; }
@@ -3859,7 +4175,16 @@ function wireControls() {
     if (c) { proc.cat = c.dataset.procCat; renderProcurement(); return; }
     const go = e.target.closest("[data-proc-go]");
     if (go) procFocus(go.dataset.procGo);
+    const ppAdd = e.target.closest("[data-pp-add]");
+    if (ppAdd) { priceBook.addFor = ppAdd.dataset.ppAdd; priceBook.addWhere = ppAdd.dataset.ppWhere || ""; renderPricing(); document.querySelector(`[data-pp-form="${ppAdd.dataset.ppAdd}"] input[name=${priceBook.addWhere ? "price" : "where"}]`)?.focus(); return; }
+    if (e.target.closest("[data-pp-cancel]")) { priceBook.addFor = null; renderPricing(); return; }
+    if (e.target.closest("#ppEstimate")) { estimatePrices(); return; }
+    if (e.target.closest("#ppSample")) { e.target.closest("#ppSample").disabled = true; fillSamplePrices(); return; }
     if (e.target.closest("#procRetry")) { proc.loadingFor = ""; proc.sources = null; proc.found = {}; procLoad(); }
+  });
+  $("page-procurement").addEventListener("submit", (e) => {
+    const f = e.target.closest("[data-pp-form]");
+    if (f) { e.preventDefault(); savePriceForm(f); }
   });
   $("page-procurement").addEventListener("change", (e) => {
     if (e.target.id === "procRadius") { proc.radius = Number(e.target.value); renderProcurement(); }

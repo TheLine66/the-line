@@ -294,6 +294,14 @@ The **Procurement** page puts the restaurant on a Google map and searches Google
 - **If it says "Google Maps isn't connected yet":** `GOOGLE_MAPS_KEY` is missing in Vercel, or you haven't redeployed since adding it.
 - **If it says "Google rejected the Maps key":** check Step A, points 3 and 5 (both APIs turned on, and your site's address on the key's list).
 
+### Smartest places to buy and the price book
+Below the map, **Smartest Places to Buy** suggests where to buy each food group (seafood, meat, produce…) and how much that would save a week. It needs one more table: run `supabase/prices.sql` once in the SQL Editor.
+
+- **Where prices come from, with no phone calls:** every scanned invoice or store receipt adds its prices on its own; **+ Price** in the **Price Book** saves a quote or shelf price; and **Estimate missing prices** has Gemini (with Google Search) look up typical prices near you for what you spend the most on. Real prices always win over estimates, and the **How sure** dots show which a suggestion is based on (●●● mostly your real prices, ●○○ estimates only).
+- **How it decides:** for each food group, what you use a week (recipes × last week's sales) × the price at each kind of place, plus the drive (70¢ a mile and $18 an hour of staff time, once a week, shared across everything bought there) and a little extra for perishables in bulk packs. A trip that costs more than it saves isn't suggested. The exact numbers are under **How this is figured** on the page, and in `PLAN` near the top of the price book code in `app.js`.
+- **Price checks worth doing** lists the one to three prices most worth checking next time someone's at a store, by how much they could save.
+- **Fill sample prices (demo)** appears when a restaurant has no prices yet, and adds a believable invoice and a few quotes for a class demo. They're marked as samples.
+
 ## The Line POS (paid add-on)
 
 The register is a **separate app** (its own GitHub repo, `the-line-pos`, and its own Vercel project) that shares this Supabase database. Restaurants with the add-on switched on get MOD Reports that fill in from the POS on their own (when a report opens, or its date, shift or hours change; reports that already have numbers are left alone, and **Pull again from the POS** refreshes them) and **Pull this week from the POS** on Weekly Sales. Everyone else sees a short note about the add-on. Setup steps are in the POS repo's README.
