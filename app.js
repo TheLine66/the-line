@@ -664,6 +664,7 @@ function suggestedAction(dish, cost, pct) {
       <div class="fix-moves">${priceMove}<div class="move-or">or</div>
         <div class="move"><div class="move-label">Leave it and</div><div class="move-val small">watch it</div><div class="move-note">check again next week</div></div></div>
       <p class="fix-lede">${driver} Raising the price brings it back to your ${t.mid}% goal.</p>
+      <div class="fix-forecast"><button class="ghostbtn dark" type="button" data-fc-changes="${dish.id}" aria-expanded="${fcChangesFor === dish.id}">${fcChangesFor === dish.id ? "Hide the forecast" : "Forecast these changes"}</button><span class="note">See what each option does to plates, sales and profit over the coming weeks</span></div>
     </section>`;
   }
   return `<section class="fix fix-red" aria-label="Suggested action">
@@ -671,6 +672,7 @@ function suggestedAction(dish, cost, pct) {
     <div class="fix-moves">${priceMove}<div class="move-or">or</div>
       <div class="move"><div class="move-label">Trim the portion by</div><div class="move-val">${portionCut.toFixed(0)}%</div><div class="move-note">keep the ${fmt(dish.price)} price</div></div></div>
     <p class="fix-lede">${driver} Either change brings food cost back to your ${t.mid}% goal.</p>
+    <div class="fix-forecast"><button class="ghostbtn dark" type="button" data-fc-changes="${dish.id}" aria-expanded="${fcChangesFor === dish.id}">${fcChangesFor === dish.id ? "Hide the forecast" : "Forecast these changes"}</button><span class="note">See what each option does to plates, sales and profit over the coming weeks</span></div>
   </section>`;
 }
 
@@ -730,6 +732,7 @@ function renderPanel() {
     </div>
     ${targetBar(pct, st)}
     ${action}
+    ${fcChangesFor === dish.id && pct > t.low ? fcChangesHtml(dish, cost) : ""}
     <div class="section-label">Recipe breakdown</div>
     <table class="ingredients">
       <thead><tr><th>Ingredient</th><th class="num">Qty</th><th class="num">Cost</th></tr></thead>

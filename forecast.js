@@ -169,7 +169,44 @@ function fcSeries(points, weeks, season, s) {
     const adj = 1 + (Number(s.adjust[w]) || 0) / 100;
     return Math.max(0, base * lift * fcWeekFactor(w, season, s) * adj);
   });
-  return { base, rate, cv, out };
+  // With a year or more on file, lean on the same weeks last year.
+  const yoy = fcYoY(points, weeks, s);
+  if (yoy) yoy.out.forEach((v, i) => { if (v != null) out[i] = Math.max(0, FC_YOY_WEIGHT * v + (1 - FC_YOY_WEIGHT) * out[i]); });
+  return { base, rate, cv, out, yoy: yoy ? yoy.growth : null };
+}
+
+// Year over year: next week ≈ the same week last year × how this year is
+// running against last year (last 8 weeks vs. the same 8 weeks a year
+// before). Holidays that moved (Thanksgiving, Easter) are evened out.
+const FC_YOY_WEIGHT = 0.7;   // 70% last year's pattern, 30% the recent-weeks model
+function fcYoY(points, weeks, s) {
+  if (points.length < 52) return null;
+  const span = (parseDay(points[points.length - 1].week) - parseDay(points[0].week)) / (7 * 864e5) + 1;
+  if (span < 52) return null;
+  const map = new Map(points.map((p) => [p.week, p.units]));
+  const hol = (w) => (s.useHolidays ? fcHolidayFactor(w) : 1);
+  // Last year's week, holiday removed, smoothed with the weeks either side (1-2-1).
+  const lastYear = (w) => {
+    const c = addDays(w, -364);
+    let num = 0, den = 0;
+    [[-7, 1], [0, 2], [7, 1]].forEach(([d, k]) => {
+      const wk = addDays(c, d);
+      if (map.has(wk)) { num += (map.get(wk) / hol(wk)) * k; den += k; }
+    });
+    return den && map.has(c) ? num / den : null;
+  };
+  let now = 0, then = 0;
+  for (const p of points.slice(-8)) {
+    const ly = map.get(addDays(p.week, -364));
+    if (ly != null) { now += p.units; then += ly; }
+  }
+  if (then <= 0) return null;
+  const growth = Math.max(0.75, Math.min(1.35, now / then));
+  const out = weeks.map((w) => {
+    const ly = lastYear(w);
+    return ly == null ? null : ly * growth * hol(w) * (1 + (Number(s.adjust[w]) || 0) / 100);
+  });
+  return out.some((v) => v != null) ? { growth, out } : null;
 }
 
 function fcCompute() {
@@ -192,7 +229,7 @@ function fcCompute() {
   const revenue = weeks.map((_, i) => perDish.reduce((a, r) => a + r.out[i] * r.d.price, 0));
   const totalSeries = fcSeries(hist.map((h) => ({ week: h.week, units: h.total })), weeks, prof.f, s);
   const spread = Math.max(0.08, Math.min(0.35, totalSeries.cv * (hist.length < 6 ? 1.5 : 1)));
-  return { s, hist, prof, weeks, perDish, totals, revenue, spread };
+  return { s, hist, prof, weeks, perDish, totals, revenue, spread, yoy: totalSeries.yoy };
 }
 
 // ---------------------------------------------------------------- render
@@ -206,10 +243,11 @@ function renderForecast() {
   const F = fcCompute();
   if (!F.hist.length) {
     page.innerHTML = `<div class="chart-card empty"><h3>No sales history yet</h3><p>The forecaster learns from the plates you've sold. Enter at least a few weeks of sales to get a forecast. More weeks give a better one.</p>
-      <button class="applybtn" data-goto="sales" type="button">Enter weekly sales</button></div>`;
+      <div class="row-actions"><button class="applybtn" data-goto="sales" type="button">Enter weekly sales</button>
+      <button class="ghostbtn dark" id="fcLoadSample" type="button">Load last year's sample POS sales</button></div></div>`;
     return;
   }
-  const { s, hist, prof, weeks, perDish, totals, revenue, spread } = F;
+  const { s, hist, prof, weeks, perDish, totals, revenue, spread, yoy } = F;
   const n = weeks.length;
   const next = totals[0], nextRev = revenue[0];
   const lastActual = hist[hist.length - 1].total;
@@ -218,13 +256,16 @@ function renderForecast() {
   const seasonPct = Math.round((prof.f[curMonth] - 1) * 100);
   const chg = lastActual ? ((next - lastActual) / lastActual) * 100 : 0;
   const conf = hist.length >= 52 ? "Good" : hist.length >= 12 ? "Fair" : "Low";
-  const confWhy = hist.length >= 52 ? "a year or more of sales on file"
+  const yoyPct = yoy ? Math.round((yoy - 1) * 100) : 0;
+  const confWhy = yoy ? `built from the same weeks last year, and you're running ${yoyPct >= 0 ? "+" : ""}${yoyPct}% vs. last year`
+    : hist.length >= 52 ? "a year or more of sales on file"
     : `${hist.length} week${hist.length === 1 ? "" : "s"} of sales on file. ${hist.length < 12 ? "12+ weeks makes this much steadier" : "A full year lets it learn your own seasons"}`;
   const sourceText = { off: "Seasons are turned off.", custom: "Using your own season profile.",
     default: "Using the starting season profile. Once you have a year of sales, the app learns your own months.",
     learned: `Blending your own sales history (${Math.round((prof.weight || 0) * 100)}%) with the starting profile.` }[prof.source];
 
   page.innerHTML = `
+    ${fcSampleCard(hist, s)}
     <div class="metrics flush">
       <div class="metric"><div class="num mono">${Math.round(next).toLocaleString()}</div><div class="label">Plates forecast, ${fmtFcWeek(weeks[0])} (${chg >= 0 ? "+" : ""}${chg.toFixed(0)}% vs. last week on file)</div></div>
       <div class="metric"><div class="num mono">${fmt0(nextRev)}</div><div class="label">Sales forecast, ${fmtFcWeek(weeks[0])}</div></div>
@@ -416,8 +457,211 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   page.addEventListener("click", (e) => {
     const t = e.target;
-    if (t.id === "fcResetSeason") update((s) => { s.season = null; });
+    if (t.id === "fcLoadSample") fcLoadSample(t);
+    else if (t.id === "fcRemoveSample") fcRemoveSample(t);
+    else if (t.id === "fcResetSeason") update((s) => { s.season = null; });
     else if (t.id === "fcClearAdjust") update((s) => { s.adjust = {}; });
     else if (t.dataset.fcDishview) { fcDishView = t.dataset.fcDishview; renderForecast(); }
   });
+});
+
+// ---------------------------------------------------------------- sample POS sales
+// For the demo: a year of made-up weekly sales "as if from your POS", so
+// the forecaster has last year to learn from. Each dish starts from its own
+// recent average, then follows the season, holidays, fall football weeks
+// and (for a pub) a big St. Patrick's week. Last year runs about 5% lower.
+const FC_SAMPLE_WEEKS = 60;
+
+function fcRand(seed) {                               // small seeded random, 0..1
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function fcHash(str) { let h = 2166136261; for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+
+function fcLongDay(w) { return parseDay(w).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+function fcSampleCard(hist, s) {
+  const span = hist.length ? (parseDay(hist[hist.length - 1].week) - parseDay(hist[0].week)) / (7 * 864e5) + 1 : 0;
+  if (s.sample) {
+    return `<div class="chart-card fc-sample"><div class="chart-head"><h3>Includes sample POS sales</h3>
+      <span class="note">The weeks of ${fcLongDay(s.sample.from)} through ${fcLongDay(s.sample.to)} are sample sales, loaded as if from your POS.</span></div>
+      <div class="row-actions"><button class="ghostbtn dark" id="fcRemoveSample" type="button">Remove the sample sales</button></div></div>`;
+  }
+  if (span >= 52) return "";
+  return `<div class="chart-card fc-sample"><div class="chart-head"><h3>Forecast from last year</h3>
+    <span class="note">With a year of sales on file, the forecast follows the same weeks last year.</span></div>
+    <p class="note" style="margin:0 0 12px">You have ${Math.round(span)} week${Math.round(span) === 1 ? "" : "s"} on file. Load a year of sample sales, as if pulled from your POS, to see it work.</p>
+    <div class="row-actions"><button class="applybtn" id="fcLoadSample" type="button">Load last year's sample POS sales</button></div></div>`;
+}
+
+function fcBuildSample() {
+  const hist = fcHistory();
+  const season = FC_DEFAULT_SEASON;
+  const lastMonday = addDays(dayStr(mondayOf(new Date())), -7);
+  const latest = hist.length ? hist[hist.length - 1].week : lastMonday;
+  const earliest = hist.length ? hist[0].week : addDays(lastMonday, 7);
+  const first = addDays(latest, -7 * (FC_SAMPLE_WEEKS - 1));
+  const pub = /irish|pub|kelley|tavern/i.test(rest?.name || "");
+  const base = new Map(dishes.map((d) => {
+    const pts = hist.map((h) => ({ week: h.week, u: h.m.get(d.id) || 0 })).filter((p) => p.u > 0);
+    const b = pts.length ? pts.reduce((a, p) => a + p.u / (season[fcMonthOf(p.week)] * fcHolidayFactor(p.week)), 0) / pts.length : 25;
+    return [d.id, b];
+  }));
+  const rows = [];
+  for (let w = first; w < earliest; w = addDays(w, 7)) {
+    const back = (parseDay(latest) - parseDay(w)) / (7 * 864e5);       // weeks before the latest week
+    const growth = 1 - 0.05 * Math.min(1, back / 52);                    // last year ran ~5% lower
+    let f = season[fcMonthOf(w)] * fcHolidayFactor(w) * growth;
+    const sat = parseDay(addDays(w, 5)), mo = sat.getMonth();
+    if (mo >= 8 && mo <= 10 && Math.floor(sat.getDate() / 7) % 2 === 0) f *= 1.08;   // home football Saturdays
+    if (pub && fcHolidaysIn(w).some((h) => h.name === "St. Patrick's Day")) f *= 1.35;
+    for (const d of dishes) {
+      const r = fcRand(fcHash(d.id + w));
+      const noise = 1 + (r() + r() - 1) * 0.08;
+      rows.push({ restaurant_id: rest.id, dish_id: d.id, week_start: w, units: Math.max(0, Math.round(base.get(d.id) * f * noise)) });
+    }
+  }
+  return { rows, from: first, to: addDays(earliest, -7) };
+}
+
+async function fcLoadSample(btn) {
+  if (!dishes.length) { toast("Add your dishes first.", "err"); return; }
+  const { rows, from, to } = fcBuildSample();
+  if (!rows.length) { toast("You already have a year of sales on file.", "err"); return; }
+  btn.disabled = true;
+  try {
+    for (let i = 0; i < rows.length; i += 500) {
+      await run(sb.from("weekly_sales").upsert(rows.slice(i, i + 500), { onConflict: "dish_id,week_start" }));
+    }
+    const s = fcSettings(); s.sample = { from, to }; fcSave(s);
+    await loadRestaurantData();
+    render();
+    toast(`Loaded ${Math.round(rows.length / dishes.length)} weeks of sample POS sales.`);
+  } catch { btn.disabled = false; }
+}
+
+async function fcRemoveSample(btn) {
+  const s = fcSettings();
+  if (!s.sample) return;
+  if (!confirm("Remove the sample sales? Your own weeks stay.")) return;
+  btn.disabled = true;
+  try {
+    await run(sb.from("weekly_sales").delete().eq("restaurant_id", rest.id).gte("week_start", s.sample.from).lte("week_start", s.sample.to));
+    delete s.sample; fcSave(s);
+    await loadRestaurantData();
+    render();
+    toast("Removed the sample sales.");
+  } catch { btn.disabled = false; }
+}
+
+// ---------------------------------------------------------------- forecast these changes
+// Cost Tracker's "Forecast these changes": what keeping the price, raising
+// it, or trimming the portion does to plates, sales and profit.
+let fcChangesFor = null;   // dish id whose comparison is open
+
+// How much plates drop when the price goes up (price sensitivity). A typical
+// restaurant rule of thumb by kind of dish, until there's price history.
+function fcSensitivity(cat) {
+  const c = String(cat || "").toLowerCase();
+  if (/dessert|sweet/.test(c)) return { e: -1.3, kind: "desserts" };
+  if (/side/.test(c)) return { e: -1.2, kind: "sides" };
+  if (/starter|app|snack|share/.test(c)) return { e: -1.1, kind: "starters" };
+  if (/drink|bev|bar|beer|wine|cocktail/.test(c)) return { e: -0.8, kind: "drinks" };
+  if (/main|entr|burger|sandwich|plate|dinner|lunch/.test(c)) return { e: -0.9, kind: "mains" };
+  return { e: -1.0, kind: "dishes like this" };
+}
+const FC_TRIM_DIP = 0.03;   // a smaller portion: assume about 3% fewer plates
+
+function fcChangesHtml(dish, cost) {
+  const hist = fcHistory();
+  const head = `<div class="fcx-head"><h3>Forecast these changes</h3><button class="linkbtn" type="button" data-fc-changes="${dish.id}">Close</button></div>`;
+  if (!hist.length) {
+    return `<section class="fcx" aria-label="Forecast these changes">${head}
+      <p class="note">There are no sales on file yet, so there's nothing to forecast from. Enter weekly sales, or load last year's sample POS sales on the Demand Forecaster.</p>
+      <button class="applybtn" data-goto="forecast" type="button">Open the Demand Forecaster</button></section>`;
+  }
+  const t = targets();
+  const F = fcCompute();
+  const r = F.perDish.find((x) => x.d.id === dish.id);
+  const n = F.weeks.length;
+  const p = dish.price;
+  const newPrice = cost / (t.mid / 100);
+  const sens = fcSensitivity(dish.category);
+  const keepMult = 1, raiseMult = Math.pow(newPrice / p, sens.e), trimMult = 1 - FC_TRIM_DIP;
+  const trimCost = p * (t.mid / 100);
+  const opts = [
+    { key: "keep", name: "Keep it as is", price: p, cost, mult: keepMult },
+    { key: "raise", name: `Raise the price to ${fmt(newPrice)}`, price: newPrice, cost, mult: raiseMult },
+    { key: "trim", name: `Trim the portion by ${((1 - trimCost / cost) * 100).toFixed(0)}%`, price: p, cost: trimCost, mult: trimMult },
+  ].map((o) => {
+    const plates = r.out.map((u) => u * o.mult);
+    const profit = plates.map((u) => u * (o.price - o.cost));
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    return { ...o, plates, profit, totPlates: sum(plates), totSales: sum(plates) * o.price, totProfit: sum(profit), pct: (o.cost / o.price) * 100 };
+  });
+  const keep = opts[0];
+  const best = opts.reduce((a, b) => (b.totProfit > a.totProfit ? b : a));
+  const perWeek = (v) => Math.round(v / n).toLocaleString();
+  const diff = (v) => (Math.abs(v) < 0.5 ? "—" : `${v > 0 ? "+" : "−"}${fmt0(Math.abs(v))}`);
+  const tenPct = Math.round((1 - Math.pow(1.1, sens.e)) * 100);
+  const raise = opts[1], trim = opts[2];
+  const lostPlates = Math.round((keep.totPlates - raise.totPlates) / n);
+  const summary = best.key === "keep"
+    ? `Keeping it as is earns the most over the next ${n} weeks, but food cost stays at ${fmtPct(keep.pct)}.`
+    : `${best.key === "raise" ? `Raising the price likely costs about ${lostPlates} plate${lostPlates === 1 ? "" : "s"} a week` : "Trimming the portion likely costs a few plates a week"}, but adds ${fmt0(best.totProfit - keep.totProfit)} in profit over the next ${n} weeks.`;
+
+  return `<section class="fcx" aria-label="Forecast these changes">${head}
+    <p class="fcx-lede">${esc(summary)}</p>
+    <div class="toolbar"><label class="stack">Weeks ahead
+      <select id="fcxHorizon">${[4, 8, 12, 16].map((v) => `<option value="${v}" ${v === fcHorizon ? "selected" : ""}>${v} weeks</option>`).join("")}</select></label></div>
+    <div class="scroll-x"><table class="perf fcx-table">
+      <thead><tr><th>Option</th><th class="num">Food cost</th><th class="num">Plates a week</th><th class="num">Sales, ${n} wks</th><th class="num">Profit, ${n} wks</th><th class="num">Vs. keeping it</th></tr></thead>
+      <tbody>${opts.map((o) => `<tr class="fcx-${o.key}${o === best ? " fcx-best" : ""}">
+        <td><span class="fcx-dot"></span>${esc(o.name)}${o === best ? ` <span class="fcx-tag">Most profit</span>` : ""}</td>
+        <td class="num mono">${fmtPct(o.pct)}</td>
+        <td class="num mono">${perWeek(o.totPlates)}</td>
+        <td class="num mono">${fmt0(o.totSales)}</td>
+        <td class="num mono"><strong>${fmt0(o.totProfit)}</strong></td>
+        <td class="num mono">${o.key === "keep" ? "—" : diff(o.totProfit - keep.totProfit)}</td></tr>`).join("")}</tbody>
+    </table></div>
+    ${fcChangesChart(F.weeks, opts)}
+    <p class="note fcx-note">Profit here is sales minus food cost for this dish. Plates come from the Demand Forecaster${F.yoy ? ", built from the same weeks last year" : ""}.
+      After a price change we assume typical price sensitivity for ${esc(sens.kind)}: a 10% price rise usually means about ${tenPct}% fewer plates. Trimming the portion assumes about ${Math.round(FC_TRIM_DIP * 100)}% fewer plates. These are rules of thumb until your POS has price-change history.</p>
+  </section>`;
+}
+
+// Small line chart: weekly profit for each option.
+function fcChangesChart(weeks, opts) {
+  const W = 640, H = 200, L = 52, R = 12, T = 12, B = 30;
+  const all = opts.flatMap((o) => o.profit);
+  const maxV = Math.max(1, ...all) * 1.1, minV = Math.max(0, Math.min(...all) * 0.85);
+  const x = (i) => L + (weeks.length === 1 ? 0.5 : i / (weeks.length - 1)) * (W - L - R);
+  const y = (v) => T + (1 - (v - minV) / (maxV - minV)) * (H - T - B);
+  const font = `font-family="Verdana, Geneva, sans-serif" font-size="11" style="fill:var(--ink)"`;
+  const color = { keep: "var(--ink)", raise: "var(--green)", trim: "var(--butter)" };
+  const ticks = [minV, (minV + maxV) / 2, maxV].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" style="stroke:var(--line)"/>
+    <text x="${L - 6}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end" ${font}>${fmt0(v)}</text>`).join("");
+  const every = Math.ceil(weeks.length / 6);
+  const xl = weeks.map((w, i) => (i % every === 0)
+    ? `<text x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle" ${font}>${parseDay(w).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>` : "").join("");
+  const lines = opts.map((o) => `<path d="${o.profit.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("")}" fill="none" style="stroke:${color[o.key]}" stroke-width="2"${o.key === "keep" ? ` stroke-dasharray="5 4" stroke-opacity="0.6"` : ""}/>`).join("");
+  return `<div class="fcx-chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weekly profit for each option">${ticks}${lines}${xl}</svg>
+    <p class="note fc-legend">${opts.map((o) => `<span class="fcx-key fcx-key-${o.key}"></span>${o.key === "keep" ? "Keep it" : o.key === "raise" ? "Raise the price" : "Trim the portion"}`).join(" ")} <span>| profit per week</span></p></div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-fc-changes]");
+  if (!b) return;
+  fcChangesFor = fcChangesFor === b.dataset.fcChanges ? null : b.dataset.fcChanges;
+  renderPanel();
+  if (fcChangesFor) document.querySelector(".fcx")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "fcxHorizon") return;
+  fcHorizon = Number(e.target.value) || 8;
+  renderPanel();
 });
