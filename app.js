@@ -487,7 +487,7 @@ function computeAll() {
 const LABOR_ON = false;
 
 const PAGE_NAMES = { home: "Tonight", cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
-  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
+  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report", procurement: "Procurement" };
 if (!LABOR_ON) delete PAGE_NAMES.labor;
 
 // Which pages show as tabs in the row under the logo. Saved in this
@@ -556,6 +556,7 @@ function render() {
   else if (activePage === "specials") renderSpecials();
   else if (activePage === "labor") renderLabor();
   else if (activePage === "mod") renderMod();
+  else if (activePage === "procurement") renderProcurement();
 }
 
 function renderRestaurantSelect() {
@@ -999,6 +1000,681 @@ function renderOverview() {
     </div>`;
 }
 
+// ---------------------------------------------------------- Procurement
+// Where this restaurant can buy what it needs, on a Google map around its
+// address. Places come from Google Maps (Places API), searched in the browser
+// with a Google Maps key that the /api/maps-key helper hands to signed-in
+// users (the key lives in Vercel's settings, never in this code):
+//   - Distributors: Sysco, US Foods, Performance Foodservice, Gordon Food Service
+//   - Wholesale clubs: Costco, Sam's Club, Restaurant Depot, BJ's
+//   - Local: farmers markets, farm stands, butchers, seafood, produce and cheese shops
+// Google's rules: its places are shown only on a Google map, and aren't saved;
+// results are kept only while the page is open.
+const PROC_TYPES = {
+  distributor: { name: "Distributors", color: "#2B4C7E", what: "Broadline delivery, by account" },
+  wholesale:   { name: "Wholesale clubs", color: "#B8902C", what: "Buy in bulk, pick up yourself" },
+  local:       { name: "Local farms & markets", color: "#3F7D3A", what: "Farmers markets, farms, butchers, fish and produce shops" },
+};
+const LOCAL_KINDS = { market: "Farmers market", farm: "Farm stand", butcher: "Butcher", seafood: "Seafood market", greengrocer: "Produce market", cheese: "Cheese shop" };
+// What to search Google for. Brand searches keep only results with that brand in the name.
+const PLACE_SEARCHES = [
+  { q: "Sysco foodservice distribution", type: "distributor", kind: "Distributor", brand: /sysco/i, far: true },
+  { q: "US Foods distribution center", type: "distributor", kind: "Distributor", brand: /us ?foods/i, far: true },
+  { q: "Performance Foodservice", type: "distributor", kind: "Distributor", brand: /performance food/i, far: true },
+  { q: "Gordon Food Service", type: "distributor", kind: "Distributor", brand: /gordon food|gfs/i, far: true },
+  { q: "Costco Wholesale", type: "wholesale", kind: "Wholesale club", brand: /costco/i },
+  { q: "Sam's Club", type: "wholesale", kind: "Wholesale club", brand: /sam'?s club/i },
+  { q: "Restaurant Depot", type: "wholesale", kind: "Wholesale club", brand: /restaurant depot/i },
+  { q: "BJ's Wholesale Club", type: "wholesale", kind: "Wholesale club", brand: /bj'?s wholesale/i },
+  { q: "farmers market", type: "local", kind: "market" },
+  { q: "farm stand", type: "local", kind: "farm" },
+  { q: "butcher shop", type: "local", kind: "butcher" },
+  { q: "seafood market", type: "local", kind: "seafood" },
+  { q: "produce market", type: "local", kind: "greengrocer" },
+  { q: "cheese shop", type: "local", kind: "cheese" },
+];
+// Ingredient groups: the words that put an ingredient in a group, and where to buy that group.
+const PROC_CATS = [
+  { id: "seafood", name: "Seafood", words: /\b(cod|fish|salmon|shrimp|prawns?|crab|lobster|oysters?|clams?|mussels?|scallops?|tuna|tilapia|haddock|halibut|catfish|trout|swordfish|mahi|snapper|grouper|branzino|octopus|calamari|squid|anchov(y|ies)|sardines?|caviar|roe)\b/i, from: ["seafood", "wholesale", "distributor"] },
+  { id: "meat", name: "Meat", words: /\b(beef|chuck|brisket|steak|sirloin|ribeye|rib-eye|filet|fillet mignon|mignon|tenderloin|strip|wagyu|patty|patties|burger|lamb|pork|bacon|rasher|banger|sausage|ham|prosciutto|pancetta|salami|pepperoni|chorizo|capicola|mortadella|guanciale|chicken|wing|wings|thigh|breast|cutlet|turkey|duck|veal|venison|bison|goat|oxtail|marrow|shank|ribs?|mince|corned|meatballs?|short rib)\b/i, from: ["butcher", "farm", "wholesale", "distributor"] },
+  { id: "dairy", name: "Dairy & eggs", words: /\b(cheese|cheddar|swiss|brie|mozzarella|parmesan|parmigiano|grana|padano|pecorino|romano|ricotta|burrata|gouda|feta|gruyere|provolone|mascarpone|fontina|havarti|manchego|gorgonzola|camembert|halloumi|cream|milk|butter|buttermilk|yogurt|yoghurt|egg|eggs|ice cream|gelato|creme fraiche)\b/i, from: ["cheese", "farm", "market", "wholesale", "distributor"] },
+  { id: "bar", name: "Beer, wine & spirits", words: /\b(stout|beer|ale|lager|wine|whiskey|whisky|vodka|gin|rum|tequila|bourbon|cider)\b/i, from: ["distributor"] },
+  { id: "produce", name: "Produce", words: /\b(lettuce|romaine|arugula|spinach|kale|greens|tomato|tomatoes|onion|onions|shallots?|scallions?|potato|potatoes|yukon|leek|leeks|celery|chive|chives|lemon|lemons|lime|limes|orange|herb|herbs|parsley|basil|cilantro|mint|thyme|rosemary|dill|vegetable|vegetables|root|peppers?|jalapenos?|garlic|carrots?|apples?|berry|berries|strawberr(y|ies)|mushrooms?|cabbage|fruit|cucumbers?|peas|corn|squash|zucchini|eggplant|avocados?|broccoli|cauliflower|asparagus|beets?|radish|fennel|ginger|bananas?|grapes?|peach|peaches|pears?|melon)\b/i, from: ["market", "farm", "greengrocer", "wholesale", "distributor"] },
+  { id: "bakery", name: "Bread & bakery", words: /\b(bread|bun|buns|roll|rolls|rye|pretzel|sponge|cake|tortillas?|bagels?|brioche|baguettes?|dough|crust|pita|naan|focaccia|ciabatta|croissants?|sourdough|flatbread|english muffins?|muffins?|biscuits?|pastry)\b/i, from: ["market", "wholesale", "distributor"] },
+  { id: "pantry", name: "Pantry & dry goods", words: /./, from: ["wholesale", "distributor"] },
+];
+const CHAINS = [
+  { name: "Sysco", match: /sysco/i, site: "https://www.sysco.com" },
+  { name: "US Foods", match: /us ?foods/i, site: "https://www.usfoods.com" },
+  { name: "Performance Foodservice", match: /performance food/i, site: "https://www.performancefoodservice.com" },
+  { name: "Gordon Food Service", match: /gordon food|gfs/i, site: "https://gfs.com" },
+];
+
+let proc = { cat: "all", radius: 25, show: new Set(["distributor", "wholesale", "local"]), geo: null, sources: null, map: null, pins: [], info: null, loadingFor: "", found: {} };
+
+function ingredientCategory(name) {
+  // Sauces, gravies and batters are pantry items even if they name a food ("Guinness BBQ sauce").
+  if (/\b(sauce|gravy|batter|dip|dressing|mash|chips|stock|crumbs|panko|flour|sugar|oil|vinegar|spice|seasoning|kraut|sauerkraut|curry)\b/i.test(name)) return "pantry";
+  return PROC_CATS.find((c) => c.words.test(name)).id;
+}
+function procNeeds() {
+  const groups = Object.fromEntries(PROC_CATS.map((c) => [c.id, []]));
+  for (const i of ingredients.values()) {
+    const out = i.on_hand !== null && Number(i.on_hand) === 0, d = daysLeft(i.use_by);
+    groups[ingredientCategory(i.name)].push({ i, out, soon: d !== null && d <= 2 });
+  }
+  for (const k in groups) groups[k].sort((a, b) => b.out - a.out || b.soon - a.soon || a.i.name.localeCompare(b.i.name));
+  return groups;
+}
+function milesBetween(a, b) {
+  const R = 3958.8, rad = (x) => (x * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function procCache(key, val) {
+  if (val === undefined) { try { return JSON.parse(safeGet(key) || "null"); } catch { return null; } }
+  try { safeSet(key, JSON.stringify(val)); } catch { /* storage full: skip */ }
+}
+
+// Google Maps loads only when this page is first opened, with the key from Vercel.
+let gmapsReady = null;
+function loadGoogleMaps() {
+  if (window.google?.maps?.importLibrary) return Promise.resolve();
+  if (gmapsReady) return gmapsReady;
+  gmapsReady = (async () => {
+    const { data } = await sb.auth.getSession();
+    const r = await fetch("/api/maps-key", { headers: { Authorization: `Bearer ${data.session?.access_token || ""}` } });
+    if (r.status === 503 || r.status === 404) { const e = new Error("not_configured"); e.code = "not_configured"; throw e; }
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.key) throw new Error(out.error || "key");
+    await new Promise((resolve, reject) => {
+      window.__lineMapsReady = resolve;
+      window.gm_authFailure = () => { proc.authFailed = true; procStatusLine("Google rejected the Maps key. Check that the key allows this website and that Maps JavaScript API and Places API (New) are turned on."); };
+      const s = document.createElement("script");
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(out.key)}&v=weekly&libraries=places&loading=async&callback=__lineMapsReady`;
+      s.async = true; s.onerror = () => reject(new Error("script"));
+      document.head.appendChild(s);
+    });
+  })();
+  gmapsReady.catch(() => { gmapsReady = null; });
+  return gmapsReady;
+}
+
+// The restaurant's address on the map (OpenStreetMap's free Nominatim; cached in this browser).
+async function geocodeRestaurant(r) {
+  const addr = oneLineAddress(r);
+  const cached = procCache(`line.geo.${r.id}`);
+  if (cached && cached.addr === addr) return cached;
+  const q = new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "us", street: r.address_line1, city: r.city, state: r.state, postalcode: r.postal_code });
+  let hit = null;
+  for (const params of [q, new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "us", postalcode: r.postal_code })]) {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { Accept: "application/json" } });
+    if (!res.ok) continue;
+    const list = await res.json();
+    if (list[0]) { hit = { addr, lat: Number(list[0].lat), lon: Number(list[0].lon), exact: params === q }; break; }
+  }
+  if (hit) procCache(`line.geo.${r.id}`, hit);
+  return hit;
+}
+
+// A box around the restaurant, so results stay nearby.
+function boundsAround(home, miles) {
+  const dLat = miles / 69, dLon = miles / (69 * Math.cos((home.lat * Math.PI) / 180));
+  return { south: home.lat - dLat, north: home.lat + dLat, west: home.lon - dLon, east: home.lon + dLon };
+}
+
+// Search Google for every kind of source at once. Brand searches look out to
+// 100 miles (distributors deliver regionally); the rest stay within the chosen distance.
+async function findSources(home, miles) {
+  const { Place } = await google.maps.importLibrary("places");
+  const fields = ["id", "displayName", "location", "formattedAddress", "googleMapsURI", "businessStatus"];
+  const runs = await Promise.allSettled(PLACE_SEARCHES.map(async (s) => {
+    const { places } = await Place.searchByText({ textQuery: s.q, fields, locationRestriction: boundsAround(home, s.far ? 100 : miles), maxResultCount: 20 });
+    return (places || []).filter((p) => p.businessStatus !== "CLOSED_PERMANENTLY" && (!s.brand || s.brand.test(p.displayName || ""))
+        && !(s.type === "distributor" && /\b(truck|entrance|enter|exit|gate|parking|dock|lot)\b/i.test(p.displayName || "")))   // a warehouse's gate or lot, not the business
+      .map((p) => {
+        const lat = typeof p.location.lat === "function" ? p.location.lat() : p.location.lat, lon = typeof p.location.lng === "function" ? p.location.lng() : p.location.lng;
+        // A distributor's walk-in store (like a Gordon Food Service Store) is a wholesale stop, not delivery.
+        const store = s.type === "distributor" && /\bstore\b/i.test(p.displayName || "");
+        return { id: p.id, name: p.displayName || "", type: store ? "wholesale" : s.type, kind: store ? "Wholesale store" : s.kind, lat, lon, miles: milesBetween(home, { lat, lon }), address: p.formattedAddress || "", maps: p.googleMapsURI || "" };
+      });
+  }));
+  const failed = runs.filter((r) => r.status === "rejected");
+  if (failed.length === runs.length) {
+    const e = new Error("places"); e.details = [...new Set(failed.map((r) => String(r.reason?.message || r.reason).slice(0, 200)))]; throw e;
+  }
+  // One place can show up in more than one search (a market that's also a farm stand): keep the first.
+  const seen = new Set(), list = [];
+  for (const r of runs) if (r.status === "fulfilled") for (const s of r.value) { if (!seen.has(s.id)) { seen.add(s.id); list.push(s); } }
+  list.sort((a, b) => a.miles - b.miles);
+  list.partial = failed.length > 0;
+  return list;
+}
+
+// Which sources fit the chosen ingredient group.
+function procVisible() {
+  const cat = PROC_CATS.find((c) => c.id === proc.cat);
+  return (proc.sources || []).filter((s) => {
+    if (!proc.show.has(s.type)) return false;
+    if (s.type !== "distributor" && s.miles > proc.radius) return false;
+    if (!cat) return true;
+    return s.type === "local" ? cat.from.includes(s.kind) : cat.from.includes(s.type);
+  });
+}
+
+function procStatusLine(msg) { const el = $("procStatus"); if (el) el.textContent = msg; }
+
+async function renderProcurement() {
+  const el = $("page-procurement");
+  if (!hasAddressCols(rest) || !rest.address_line1) {
+    procClearMap();
+    el.innerHTML = `<div class="perf-wrap"><div class="chart-card empty">
+      <h3>Add Your Restaurant's Address First</h3>
+      <p>Procurement maps the places near ${esc(rest.name)} where you can buy what you need. It needs the full street address.</p>
+      ${hasAddressCols(rest) ? `<button class="applybtn" id="procAddAddress" type="button">Add the address in Settings</button>` : `<p>${esc(ADDRESS_SETUP)}</p>`}
+    </div></div>`;
+    return;
+  }
+  const needs = procNeeds();
+  const cats = PROC_CATS.filter((c) => needs[c.id].length);
+  if (proc.cat !== "all" && !cats.some((c) => c.id === proc.cat)) proc.cat = "all";
+  const cat = PROC_CATS.find((c) => c.id === proc.cat);
+  if (!el.querySelector("#procMap")) {
+    procClearMap();
+    el.innerHTML = `<div class="perf-wrap proc">
+      <div class="chart-card">
+        <div class="chart-head"><h3>Sourcing Near ${esc(rest.name)}</h3><span class="note" id="procWhere"></span></div>
+        <div class="proc-need-head"><strong>What do you need?</strong><span class="note">Pick a group to see only the places that sell it.</span></div>
+        <div class="proc-cats" id="procCats" role="group" aria-label="Ingredient groups"></div>
+        <p class="proc-detail" id="procDetail"></p>
+        <div class="proc-controls">
+          <label class="inline">Within <select id="procRadius">${[10, 25, 50].map((m) => `<option value="${m}" ${m === proc.radius ? "selected" : ""}>${m} miles</option>`).join("")}</select></label>
+          ${Object.entries(PROC_TYPES).map(([k, v]) => `<label class="proc-toggle"><input type="checkbox" data-proc-type="${k}" ${proc.show.has(k) ? "checked" : ""}><span class="proc-dot" style="background:${v.color}"></span>${v.name}</label>`).join("")}
+          <span class="note" id="procStatus" aria-live="polite"></span>
+        </div>
+      </div>
+      <div class="proc-grid">
+        <div class="chart-card proc-map-card"><div id="procMap" role="region" aria-label="Map of nearby sources"></div>
+          <p class="note proc-credit"><span class="proc-dot proc-home"></span> ${esc(rest.name)} | dashed ring = your distance. Places from Google Maps; check hours before you go.</p></div>
+        <div class="chart-card proc-list-card"><div class="chart-head"><h3>Nearby Sources</h3><span class="note" id="procCount"></span></div><div id="procList"></div></div>
+      </div>
+      <div class="chart-card"><div class="chart-head"><h3>Large Distributors</h3><span class="note">They deliver to restaurants by account, not walk-in</span></div><div id="procChains"></div></div>
+      <div id="procPricing"></div>
+    </div>`;
+  }
+  // The price book loads alongside the map; the first time, Gemini fills in typical prices.
+  loadPriceBook().then(() => {
+    renderPricing();
+    if (priceBook.ready === true && !priceBook.points.some((p) => p.source === "estimate") && weeklyUse().size) estimatePrices(true);
+  });
+  $("procCats").innerHTML = [`<button type="button" class="proc-cat" data-proc-cat="all" aria-pressed="${proc.cat === "all"}">Everything <span>${ingredients.size}</span></button>`,
+    ...cats.map((c) => { const out = needs[c.id].filter((x) => x.out).length;
+      return `<button type="button" class="proc-cat${out ? " has-out" : ""}" data-proc-cat="${c.id}" aria-pressed="${proc.cat === c.id}">${c.name} <span>${needs[c.id].length}</span>${out ? `<b class="proc-out">${out} 86'd</b>` : ""}</button>`; })].join("");
+  if (cat) {
+    const list = needs[cat.id];
+    const where = cat.from.map((k) => (LOCAL_KINDS[k] || PROC_TYPES[k]?.name || k).toLowerCase()).join(", ");
+    $("procDetail").innerHTML = `<strong>${cat.name}:</strong> ${list.slice(0, 8).map((x) => `${esc(x.i.name)}${x.out ? ` <b class="proc-out">86'd</b>` : x.soon ? ` <span class="proc-soon">spoils soon</span>` : ""}`).join(", ")}${list.length > 8 ? `, and ${list.length - 8} more` : ""}.
+      <span class="proc-where">Best bought from: ${esc(where)}.</span>${cat.id === "bar" ? ` <span class="proc-where">Most states require restaurants to buy alcohol from a licensed wholesaler, not a store.</span>` : ""}`;
+  } else {
+    const out = [...ingredients.values()].filter((i) => i.on_hand !== null && Number(i.on_hand) === 0);
+    $("procDetail").innerHTML = out.length ? `<strong>Reorder now:</strong> ${out.map((i) => `${esc(i.name)} <b class="proc-out">86'd</b>`).join(", ")}.` : "Showing every kind of source near you.";
+  }
+  $("procWhere").textContent = oneLineAddress(rest);
+  await procLoad();
+}
+
+async function procLoad() {
+  const want = `${rest.id}|${oneLineAddress(rest)}|${Math.max(proc.radius, 25)}`;
+  const say = (msg, opts = {}) => {
+    procStatusLine(msg);
+    if (!proc.sources) $("procList").innerHTML = `<p class="proc-msg">${msg}</p>${opts.retry ? `<button class="ghostbtn dark" id="procRetry" type="button">Try again</button>` : ""}${opts.details?.length ? `<details class="proc-why" open><summary>What Google said</summary><ul>${opts.details.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></details>` : ""}`;
+  };
+  if (!proc.geo || proc.geo.addr !== oneLineAddress(rest) || !proc.loadingFor.startsWith(rest.id)) {
+    proc.sources = null;
+    say("Finding your restaurant on the map…");
+    try { proc.geo = await geocodeRestaurant(rest); } catch { proc.geo = null; }
+    if (!proc.geo) { say("Couldn't find that address on the map. Check it in Settings.", { retry: true }); return; }
+  }
+  try {
+    await loadGoogleMaps();
+  } catch (err) {
+    if (err.code === "not_configured") {
+      say(`Google Maps isn't connected yet. Whoever set up The Line needs to add a <strong>GOOGLE_MAPS_KEY</strong> in Vercel's settings. The steps are in the README under "Procurement (Google Maps)".`);
+    } else say("Google Maps couldn't load. Check your internet connection.", { retry: true });
+    return;
+  }
+  procDrawMap();
+  if (proc.found[want]) proc.sources = proc.found[want];
+  if (!proc.sources || proc.loadingFor !== want) {
+    proc.loadingFor = want;
+    proc.sources = null;
+    procDrawSources();                              // your restaurant's pin, right away
+    say("Searching Google Maps for places nearby…");
+    try {
+      const found = await findSources(proc.geo, Math.max(proc.radius, 25));
+      if (proc.loadingFor !== want) return;         // the distance or restaurant changed meanwhile
+      proc.sources = proc.found[want] = found;
+    } catch (err) {
+      if (proc.loadingFor !== want) return;
+      proc.loadingFor = "";
+      say("Google Maps didn't return any places.", { retry: true, details: err.details || [String(err.message || err)] });
+      return;
+    }
+  }
+  procStatusLine(proc.sources.partial ? "Some searches didn't answer; the rest are shown." : proc.geo.exact ? "" : "Placed by ZIP code; the street address wasn't found.");
+  procDrawSources();
+}
+
+function procClearMap() {
+  proc.pins.forEach((p) => p.setMap(null)); proc.pins = [];
+  proc.map = null;
+}
+function procDrawMap() {
+  const box = $("procMap");
+  if (!box) return;
+  if (proc.map && proc.map.getDiv() !== box) procClearMap();
+  if (!proc.map) {
+    proc.map = new google.maps.Map(box, { center: { lat: proc.geo.lat, lng: proc.geo.lon }, zoom: 11, mapTypeControl: false, streetViewControl: false, fullscreenControl: true, clickableIcons: false, gestureHandling: "cooperative" });
+    proc.info = new google.maps.InfoWindow();
+  }
+}
+const dotIcon = (color, scale = 7, ring = "#FFFFFF", ringW = 2) => ({ path: google.maps.SymbolPath.CIRCLE, scale, fillColor: color, fillOpacity: 1, strokeColor: ring, strokeWeight: ringW });
+function procDrawSources() {
+  if (!proc.map) return;
+  const home = { lat: proc.geo.lat, lng: proc.geo.lon }, list = procVisible();
+  procClearPins();
+  const ring = new google.maps.Circle({ map: proc.map, center: home, radius: proc.radius * 1609.34, strokeColor: "#163829", strokeOpacity: 0.5, strokeWeight: 1, fillOpacity: 0, clickable: false });
+  proc.pins.push(ring);
+  const label = (s) => (s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind);
+  for (const s of list) {
+    const m = new google.maps.Marker({ map: proc.map, position: { lat: s.lat, lng: s.lon }, title: s.name, icon: dotIcon(PROC_TYPES[s.type].color) });
+    m.addListener("click", () => procOpen(s, m));
+    s.pin = m;
+    proc.pins.push(m);
+  }
+  // The restaurant goes on last so it's never hidden under a source next door.
+  const you = new google.maps.Marker({ map: proc.map, position: home, title: rest.name, icon: dotIcon("#163829", 10, "#B8902C", 4), zIndex: 9999 });
+  you.addListener("click", () => { proc.info.setContent(`<div class="proc-info"><strong>${esc(rest.name)}</strong><br>${esc(oneLineAddress(rest))}</div>`); proc.info.open({ map: proc.map, anchor: you }); });
+  proc.pins.push(you);
+  if (!proc.sources) { proc.map.setCenter(home); proc.map.setZoom(11); return; }
+  const nearby = list.filter((s) => s.miles <= proc.radius);
+  if (nearby.length) {
+    const b = new google.maps.LatLngBounds(); b.extend(home); nearby.forEach((s) => b.extend({ lat: s.lat, lng: s.lon }));
+    proc.map.fitBounds(b, 40);
+  } else proc.map.fitBounds(ring.getBounds(), 20);
+  $("procCount").textContent = `${list.length} ${list.length === 1 ? "place" : "places"}`;
+  $("procList").innerHTML = list.length ? `<ul class="proc-list">${list.slice(0, 80).map((s) => `<li>
+      <span class="proc-dot" style="background:${PROC_TYPES[s.type].color}"></span>
+      <div><button type="button" class="proc-name" data-proc-go="${esc(s.id)}">${esc(s.name)}</button>
+      <div class="proc-meta">${esc(label(s))} | ${s.miles.toFixed(1)} mi${s.address ? ` | ${esc(s.address.replace(/, USA$/, ""))}` : ""}</div>
+      <div class="proc-links"><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.maps ? ` <a href="${esc(s.maps)}" target="_blank" rel="noopener">Hours &amp; phone on Google Maps</a>` : ""}</div></div></li>`).join("")}</ul>`
+    : `<p class="ms-empty">No ${proc.cat === "all" ? "" : PROC_CATS.find((c) => c.id === proc.cat).name.toLowerCase() + " "}sources found within ${proc.radius} miles. Try a wider distance.</p>`;
+  $("procChains").innerHTML = `<div class="proc-chains">${CHAINS.map((c) => {
+    const near = (proc.sources || []).filter((s) => s.type === "distributor" && c.match.test(s.name)).sort((a, b) => a.miles - b.miles)[0];
+    return `<div class="proc-chain"><strong>${c.name}</strong>
+      <span>${near ? `Nearest location: ${esc(near.name)}, ${near.miles.toFixed(0)} mi` : "No location found within 100 miles. Most deliver across a region; ask for a sales rep."}</span>
+      <a href="${c.site}" target="_blank" rel="noopener">Set up an account</a></div>`; }).join("")}</div>`;
+  renderPricing();
+}
+function procClearPins() { proc.pins.forEach((p) => p.setMap(null)); proc.pins = []; }
+function procOpen(s, marker) {
+  const label = s.type === "local" ? LOCAL_KINDS[s.kind] : s.kind;
+  proc.info.setContent(`<div class="proc-info"><strong>${esc(s.name)}</strong><br>${esc(label)} | ${s.miles.toFixed(1)} mi${s.address ? `<br>${esc(s.address.replace(/, USA$/, ""))}` : ""}<br><a href="${procDirections(s)}" target="_blank" rel="noopener">Directions</a>${s.maps ? ` | <a href="${esc(s.maps)}" target="_blank" rel="noopener">Google Maps</a>` : ""}</div>`);
+  proc.info.open({ map: proc.map, anchor: marker });
+}
+function procDirections(s) {
+  return `https://www.google.com/maps/dir/?api=1&origin=${proc.geo.lat},${proc.geo.lon}&destination=${encodeURIComponent(s.name)}&destination_place_id=${encodeURIComponent(s.id)}`;
+}
+function procFocus(id) {
+  const s = (proc.sources || []).find((x) => x.id === id);
+  if (!s || !proc.map || !s.pin) return;
+  proc.map.setCenter({ lat: s.lat, lng: s.lon }); proc.map.setZoom(14);
+  procOpen(s, s.pin);
+  $("procMap").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// ---------------------------------------------------------- Price book & smartest places to buy
+// Every price The Line learns goes in the price book (supabase/prices.sql):
+// real prices from scanned invoices and receipts, quotes the owner types in,
+// and typical-price estimates from Gemini with Google Search to fill gaps.
+// The buying plan compares, for each food group, the true weekly cost of
+// buying it at each kind of place: price x what you use a week, plus the trip
+// (miles and staff time) for places you drive to, plus a spoilage allowance
+// for perishables bought in big packs. It shows how sure it is: real prices
+// count more than estimates.
+const PLAN = {
+  milesCost: 0.70,          // $ per mile driven (about the IRS mileage rate)
+  mph: 30,                  // average driving speed in town
+  shopMinutes: 30,          // time in the store
+  wage: 18,                 // $ per hour for whoever does the run
+  tripsPerWeek: 1,
+  spoil: { distributor: 0.02, wholesale: 0.08, local: 0 },   // extra waste from pack sizes, perishables only
+  perishable: new Set(["produce", "seafood", "meat", "dairy", "bakery"]),
+  estimateDays: 14,         // estimates older than this get looked up again
+};
+let priceBook = { rid: null, ready: null, points: [], estimating: false, addFor: null, msg: "" };
+
+function supplierType(name) {
+  const n = String(name || "");
+  if (/gordon food service store|gfs store|costco|sam'?s club|restaurant depot|bj'?s wholesale|smart ?& ?final|chef'?store|jetro|webstaurant/i.test(n)) return "wholesale";
+  if (/sysco|us ?foods|performance food|gordon food|\bgfs\b|reinhart|ben e\.? ?keith|shamrock foods|cheney|chefs'? warehouse/i.test(n)) return "distributor";
+  if (/farm|market|butcher|seafood|fish|produce|creamery|dairy|bakery|orchard|grocer|cheese/i.test(n)) return "local";
+  return "other";
+}
+const BRANDS = ["costco", "sam's club", "restaurant depot", "bj's", "sysco", "us foods", "performance food", "gordon food"];
+function brandOf(name) {
+  const n = String(name || "").toLowerCase().replace(/’/g, "'");
+  return BRANDS.find((b) => n.includes(b)) || n.trim();
+}
+
+async function loadPriceBook() {
+  if (priceBook.rid === rest.id && priceBook.ready !== null) return;
+  priceBook = { rid: rest.id, ready: null, points: [], estimating: false, addFor: null, msg: "" };
+  const res = await sb.from("price_points").select("*").eq("restaurant_id", rest.id).order("observed_on", { ascending: false }).order("created_at", { ascending: false });
+  if (res.error) { priceBook.ready = isMissingTable(res.error) ? false : null; if (priceBook.ready === null) priceBook.msg = esc(friendlyError(res.error)); return; }
+  priceBook.ready = true;
+  priceBook.points = res.data.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) }));
+}
+
+// How much of each ingredient a week, from the latest week of sales x recipes.
+function weeklyUse() {
+  const week = sortedWeeks()[0], units = week ? salesByWeek.get(week) : null, use = new Map();
+  if (!units) return use;
+  for (const d of dishes) {
+    const u = units.get(d.id) || 0;
+    if (!u) continue;
+    for (const it of d.items) use.set(it.ingredient_id, (use.get(it.ingredient_id) || 0) + u * it.qty);
+  }
+  return use;
+}
+
+// The newest price for an ingredient that passes a test.
+function latestPrice(ingId, test) {
+  return priceBook.points.find((p) => p.ingredient_id === ingId && test(p)) || null;
+}
+const isReal = (p) => p.source !== "estimate";
+
+// Trip cost for one run to a place this many miles away.
+function tripCost(miles) {
+  const rt = miles * 2;
+  return PLAN.tripsPerWeek * (rt * PLAN.milesCost + ((rt / PLAN.mph) * 60 + PLAN.shopMinutes) / 60 * PLAN.wage);
+}
+
+function buildPlan() {
+  const use = weeklyUse();
+  const near = (test) => (proc.sources || []).filter(test).sort((a, b) => a.miles - b.miles)[0] || null;
+  const realWholesale = priceBook.points.filter((p) => isReal(p) && p.supplier_type === "wholesale");
+  // The wholesale clubs to compare: the nearest location of every club you have real prices from, plus the nearest club.
+  const clubs = [...new Set(realWholesale.map((p) => brandOf(p.supplier)))]
+    .map((brand) => near((s) => s.type === "wholesale" && brandOf(s.name) === brand))
+    .concat([near((s) => s.type === "wholesale")]).filter(Boolean)
+    .filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i).slice(0, 4);
+  const distName = (priceBook.points.find((p) => isReal(p) && p.supplier_type === "distributor") || {}).supplier;
+  const rows = [], checks = [];
+  let totalNow = 0, totalPlan = 0;
+  for (const cat of PROC_CATS) {
+    const items = [...ingredients.values()].filter((i) => ingredientCategory(i.name) === cat.id && (use.get(i.id) || 0) > 0);
+    if (!items.length) continue;
+    const now = items.reduce((t, i) => t + use.get(i.id) * i.cost, 0);
+    const local = cat.from.some((k) => LOCAL_KINDS[k]) ? near((s) => s.type === "local" && cat.from.includes(s.kind)) : null;
+    const options = [
+      { key: "distributor", name: distName || "A distributor (Sysco, US Foods)", delivered: true, miles: 0, test: (p) => p.supplier_type === "distributor" },
+      ...(cat.from.includes("wholesale") ? clubs : []).map((club) => ({ key: "wholesale", name: club.name, miles: club.miles, test: (p) => p.supplier_type === "wholesale" && (p.source === "estimate" || brandOf(p.supplier) === brandOf(club.name)) })),
+      local ? { key: "local", name: local.name, miles: local.miles, test: (p) => p.supplier_type === "local" } : null,
+    ].filter(Boolean);
+    for (const o of options) {
+      let goods = 0, priced = 0, real = 0;
+      o.lines = items.map((i) => {
+        const q = use.get(i.id), base = q * i.cost;
+        const r = latestPrice(i.id, (p) => isReal(p) && o.test(p));
+        const fresh = (p) => p.source === "estimate" && daysLeft(addDays(p.observed_on, 60)) >= 0;   // estimates count for 60 days
+        const e = r ? null : latestPrice(i.id, (p) => fresh(p) && o.test(p) && p.supplier.startsWith("Typical"));
+        const p = r || e;
+        goods += p ? q * p.unit_cost : base;
+        if (p) priced += base;
+        if (r) real += base;
+        return { i, q, price: p };
+      });
+      o.goods = goods;
+      o.spoil = PLAN.perishable.has(cat.id) ? goods * PLAN.spoil[o.key] : 0;
+      o.cost = goods + o.spoil;
+      o.pricedShare = now ? priced / now : 0;
+      o.realShare = now ? real / now : 0;
+    }
+    const usable = options.filter((o) => o.pricedShare >= 0.5);
+    rows.push({ cat, now, items, options, usable });
+    // Price checks: an estimate says it's cheaper somewhere, but there's no real price there yet.
+    for (const o of options) for (const l of o.lines) {
+      if (!l.price || l.price.source !== "estimate") continue;
+      const save = l.q * (l.i.cost - l.price.unit_cost);
+      if (save >= 3) checks.push({ i: l.i, where: o.name, key: o.key, est: l.price.unit_cost, save });
+    }
+  }
+  // Pick the cheapest option per group, then make sure each trip pays for itself.
+  for (const r of rows) {
+    r.pick = [...r.usable].sort((a, b) => a.cost - b.cost)[0] || null;
+    if (r.pick && r.pick.cost >= r.now) r.pick = null;          // nothing beats what you pay now
+  }
+  const byPlace = new Map();
+  for (const r of rows) if (r.pick && !r.pick.delivered) {
+    const k = r.pick.name;
+    if (!byPlace.has(k)) byPlace.set(k, { miles: r.pick.miles, rows: [] });
+    byPlace.get(k).rows.push(r);
+  }
+  for (const [, g] of byPlace) {
+    g.trip = tripCost(g.miles);
+    const save = g.rows.reduce((t, r) => t + (r.now - r.pick.cost), 0);
+    if (save <= g.trip) {               // the drive costs more than it saves: fall back to delivery or staying put
+      for (const r of g.rows) { const d = r.usable.find((o) => o.delivered); r.pick = d && d.cost < r.now ? d : null; r.tripDropped = true; }
+    } else for (const r of g.rows) r.trip = g.trip * ((r.now - r.pick.cost) / save);   // share the trip by savings
+  }
+  for (const r of rows) {
+    r.planCost = r.pick ? r.pick.cost + (r.trip || 0) : r.now;
+    totalNow += r.now; totalPlan += r.planCost;
+  }
+  checks.sort((a, b) => b.save - a.save);
+  const seen = new Set();
+  return { rows, totalNow, totalPlan, checks: checks.filter((c) => !seen.has(c.i.id) && seen.add(c.i.id)).slice(0, 3), hasSales: use.size > 0 };
+}
+
+const dots = (share) => (share >= 0.6 ? "●●●" : share > 0.15 ? "●●○" : "●○○");
+const sourceWord = { invoice: "Invoice", receipt: "Receipt", quote: "Quote", estimate: "Estimate" };
+
+function renderPricing() {
+  const el = $("procPricing");
+  if (!el) return;
+  if (priceBook.ready === false) {
+    el.innerHTML = `<div class="chart-card"><div class="chart-head"><h3>Smartest Places to Buy</h3></div>
+      <p>One more database step: in Supabase, open <strong>SQL Editor</strong> → <strong>New query</strong>, paste in everything from <code>supabase/prices.sql</code>, click <strong>Run</strong>, then reload this page. That adds the price book this page learns prices into.</p></div>`;
+    return;
+  }
+  if (priceBook.ready !== true) { el.innerHTML = ""; return; }
+  const plan = buildPlan(), use = weeklyUse();
+  const save = plan.totalNow - plan.totalPlan;
+  const anyReal = priceBook.points.some(isReal);
+  const planRows = plan.rows.map((r) => {
+    const p = r.pick, by = p ? p.name : "Where you buy now";
+    const why = p
+      ? `${fmt0(r.now - r.planCost)} less a week${p.delivered ? ", delivered" : ` after a ${Math.round(p.miles * 2)}-mile round trip`}${p.spoil ? `, with ${Math.round(PLAN.spoil[p.key] * 100)}% extra for bigger packs` : ""}.`
+      : r.tripDropped ? "A cheaper place is too far to be worth the drive." : r.usable.length ? "You already pay the best price we know of." : "Not enough prices yet to compare.";
+    return `<tr><td><strong>${r.cat.name}</strong></td><td>${esc(by)}${p && !p.delivered ? `<div class="pp-sub">${p.miles.toFixed(1)} mi</div>` : ""}</td>
+      <td class="num mono">${fmt0(r.now)}</td><td class="num mono">${fmt0(r.planCost)}</td>
+      <td class="num mono ${r.now - r.planCost > 0.5 ? "pp-save" : ""}">${r.now - r.planCost > 0.5 ? fmt0(r.now - r.planCost) : "—"}</td>
+      <td class="pp-conf" title="How sure: ●●● mostly your real prices, ●●○ some, ●○○ estimates only">${p ? dots(p.realShare) : ""}</td>
+      <td class="pp-why">${why}</td></tr>`;
+  }).join("");
+  const checks = plan.checks.length ? `<div class="pp-checks"><h4>Price Checks Worth Doing</h4><ol>${plan.checks.map((c) => `<li>
+      <span>Check <strong>${esc(c.i.name)}</strong> at <strong>${esc(c.where)}</strong> next time: estimated ${fmt(c.est)} vs. ${fmt(c.i.cost)} now per ${esc(c.i.unit)}. Could save about <strong>${fmt0(c.save)} a week</strong>.</span>
+      <button class="linkbtn" type="button" data-pp-add="${c.i.id}" data-pp-where="${esc(c.where)}">Add the price</button></li>`).join("")}</ol></div>` : "";
+  // Price book: ingredients by weekly spend
+  const list = [...ingredients.values()].map((i) => ({ i, q: use.get(i.id) || 0 })).sort((a, b) => b.q * b.i.cost - a.q * a.i.cost || a.i.name.localeCompare(b.i.name));
+  const nearbyNames = [...new Set([...(proc.sources || []).map((s) => s.name), ...priceBook.points.filter(isReal).map((p) => p.supplier)])];
+  const bookRow = ({ i, q }) => {
+    const pts = priceBook.points.filter((p) => p.ingredient_id === i.id);
+    const bySupplier = new Map();
+    for (const p of pts) if (!bySupplier.has(p.supplier)) bySupplier.set(p.supplier, p);   // newest per place
+    const best = [...bySupplier.values()].sort((a, b) => a.unit_cost - b.unit_cost)[0];
+    const adding = priceBook.addFor === i.id;
+    return `<tr${adding ? ' class="pp-adding"' : ""}><td><strong>${esc(i.name)}</strong><div class="pp-sub">${ingredientCategoryName(i.name)}</div></td>
+      <td class="num mono">${q ? `${trimNum(Math.round(q * 10) / 10)} ${esc(i.unit)}` : "—"}</td>
+      <td class="num mono">${fmt(i.cost)}</td>
+      <td>${best ? `<span class="mono">${fmt(best.unit_cost)}</span> at ${esc(best.supplier)} <span class="pp-src ${best.source}">${sourceWord[best.source]}, ${fmtDay(best.observed_on)}</span>` : `<span class="pp-sub">No prices yet</span>`}
+        ${bySupplier.size > 1 ? `<details class="pp-all"><summary>All ${bySupplier.size} places</summary><ul>${[...bySupplier.values()].sort((a, b) => a.unit_cost - b.unit_cost).map((p) => `<li><span class="mono">${fmt(p.unit_cost)}</span> ${esc(p.supplier)} <span class="pp-src ${p.source}">${sourceWord[p.source]}, ${fmtDay(p.observed_on)}</span>${p.low_cost && p.high_cost ? ` <span class="pp-sub">(usually ${fmt(p.low_cost)}–${fmt(p.high_cost)})</span>` : ""}</li>`).join("")}</ul></details>` : ""}</td>
+      <td class="num"><button class="ghostbtn dark pp-addbtn" type="button" data-pp-add="${i.id}">+ Price</button></td></tr>
+      ${adding ? `<tr class="pp-form-row"><td colspan="5"><form class="pp-form" data-pp-form="${i.id}">
+        <label>Place<input name="where" list="ppPlaces" maxlength="120" required value="${esc(priceBook.addWhere || "")}" placeholder="e.g. Costco Wholesale"></label>
+        <label>Price per ${esc(i.unit)} ($)<input name="price" type="number" min="0" step="0.0001" required class="mono"></label>
+        <label>Date<input name="date" type="date" value="${dayStr(new Date())}" required></label>
+        <label>Kind<select name="source"><option value="quote">Quote or shelf price</option><option value="receipt">From a receipt</option><option value="invoice">From an invoice</option></select></label>
+        <button class="applybtn" type="submit">Save price</button><button class="linkbtn" type="button" data-pp-cancel>Cancel</button>
+        <span class="pp-sub">Tip: a case price? Divide by how many ${esc(i.unit)} are in the case.</span></form></td></tr>` : ""}`;
+  };
+  const top = list.filter((x) => x.q > 0), rest_ = list.filter((x) => !x.q);
+  el.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-head"><h3>Smartest Places to Buy</h3>
+        <div class="pp-actions">${priceBook.points.length ? "" : `<button class="ghostbtn dark" id="ppSample" type="button">Fill sample prices (demo)</button>`}
+          <button class="ghostbtn dark" id="ppEstimate" type="button" ${priceBook.estimating ? "disabled" : ""}>${priceBook.estimating ? "Looking up prices…" : "Estimate missing prices"}</button></div></div>
+      ${priceBook.msg ? `<p class="pp-msg">${priceBook.msg}</p>` : ""}
+      ${!plan.hasSales ? `<p>Enter a week on <strong>Weekly Sales</strong> first. The plan needs to know how much of each ingredient you use.</p>` : `
+      <div class="pp-total"><div><span class="pp-big mono">${save > 0.5 ? fmt0(save) : "$0"}</span><span>could be saved each week${save > 0.5 ? ` (about ${fmt0(save * 52)} a year)` : ""}</span></div>
+        <p>${anyReal ? "Based on your invoices and quotes, with estimates filling the gaps." : "Based on estimates so far. Scan invoices and receipts, or add a few prices, to make it sharper."}</p></div>
+      <div class="scroll-x"><table class="pp-plan"><thead><tr><th>Food group</th><th>Buy at</th><th class="num">Now / week</th><th class="num">Plan / week</th><th class="num">Saves</th><th>How sure</th><th>Why</th></tr></thead><tbody>${planRows}</tbody></table></div>
+      ${checks}
+      <details class="pp-how"><summary>How this is figured</summary><p>For each food group: what you use a week (your recipes × last week's sales) × the price at each kind of place. Places you drive to add ${fmt(PLAN.milesCost)} a mile and ${fmt(PLAN.wage)} an hour of staff time for the round trip and ${PLAN.shopMinutes} minutes in the store, once a week, shared across everything bought there; a trip that costs more than it saves isn't suggested. Perishables bought at a warehouse club add ${Math.round(PLAN.spoil.wholesale * 100)}% for the bigger packs going bad (${Math.round(PLAN.spoil.distributor * 100)}% for distributor cases). Real prices (invoices, receipts, quotes) always win over estimates; a group needs prices for at least half of its spending before a place is compared.</p></details>`}
+    </div>
+    <div class="chart-card">
+      <div class="chart-head"><h3>Price Book</h3><span class="note">Every price The Line has seen, newest first. Scanned invoices add theirs on their own.</span></div>
+      <datalist id="ppPlaces">${nearbyNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+      <div class="scroll-x"><table class="pp-book"><thead><tr><th>Ingredient</th><th class="num">Used / week</th><th class="num">Paying now</th><th>Best price found</th><th></th></tr></thead>
+        <tbody>${top.map(bookRow).join("")}</tbody></table></div>
+      ${rest_.length ? `<details class="pp-more"><summary>${rest_.length} ingredients not in last week's sales</summary><div class="scroll-x"><table class="pp-book"><tbody>${rest_.map(bookRow).join("")}</tbody></table></div></details>` : ""}
+    </div>`;
+}
+function ingredientCategoryName(name) { return PROC_CATS.find((c) => c.id === ingredientCategory(name)).name; }
+
+// One price per ingredient per place: a newer price from the same place
+// replaces the old one ("Costco", "Costco Wholesale" and "COSTCO WHOLESALE
+// #1145" are the same place), and different places are all kept. An older
+// price never replaces a newer one. The new price is saved first, then the
+// old one is removed, so a failed save never loses a price.
+const placeKey = (p) => `${p.ingredient_id}|${p.supplier_type}|${brandOf(p.supplier)}`;
+async function addPricePoints(rows) {
+  const incoming = new Map();                       // the same item twice in one batch: keep the newest
+  for (const r of rows) { const k = placeKey(r), had = incoming.get(k); if (!had || String(r.observed_on) >= String(had.observed_on)) incoming.set(k, r); }
+  const keep = [], replace = [];
+  for (const [k, r] of incoming) {
+    const old = priceBook.points.filter((p) => placeKey(p) === k);
+    if (old.some((p) => String(p.observed_on) > String(r.observed_on))) continue;   // we already have a newer price from there
+    keep.push(r); replace.push(...old.map((p) => p.id));
+  }
+  if (!keep.length) return { saved: 0, skipped: rows.length };
+  const saved = await run(sb.from("price_points").insert(keep).select("*"));
+  if (replace.length) {
+    try { await run(sb.from("price_points").delete().in("id", replace)); } catch { /* the new prices are saved; old rows just stay */ }
+  }
+  const gone = new Set(replace);
+  priceBook.points = [...saved.map((p) => ({ ...p, unit_cost: Number(p.unit_cost), low_cost: p.low_cost == null ? null : Number(p.low_cost), high_cost: p.high_cost == null ? null : Number(p.high_cost) })),
+    ...priceBook.points.filter((p) => !gone.has(p.id))]
+    .sort((a, b) => String(b.observed_on).localeCompare(String(a.observed_on)) || String(b.created_at).localeCompare(String(a.created_at)));
+  return { saved: saved.length, skipped: rows.length - keep.length, replaced: replace.length };
+}
+
+async function savePriceForm(form) {
+  const ing = ingredients.get(form.dataset.ppForm), f = new FormData(form);
+  const where = String(f.get("where") || "").trim(), price = Number(f.get("price"));
+  if (!ing || !where || !Number.isFinite(price) || price < 0) { toast("Add the place and a price of 0 or more.", "err"); return; }
+  const placed = (proc.sources || []).find((s) => s.name.toLowerCase() === where.toLowerCase());
+  try {
+    await addPricePoints([{ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: where, supplier_type: placed ? placed.type : supplierType(where),
+      unit: ing.unit, unit_cost: price, source: String(f.get("source")), observed_on: String(f.get("date")) || dayStr(new Date()) }]);
+    priceBook.addFor = null; priceBook.addWhere = "";
+    renderPricing();
+    toast(`Saved: ${ing.name} at ${where}.`);
+  } catch { /* toast shown */ }
+}
+
+// After a scanned invoice or receipt is added: remember what was paid where.
+async function logInvoicePrices(draft, rows) {
+  if (priceBook.ready === false) return;
+  const supplier = String(draft.supplier || "").trim() || "Supplier on a scanned invoice";
+  const type = supplierType(supplier);
+  const out = [];
+  for (const x of rows) {
+    const ing = [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).trim().toLowerCase());
+    if (!ing || !(Number(x.cost) >= 0)) continue;
+    out.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier, supplier_type: type, unit: ing.unit, unit_cost: Number(x.cost),
+      source: type === "wholesale" || type === "local" ? "receipt" : "invoice", observed_on: draft.date || dayStr(new Date()) });
+  }
+  try { await addPricePoints(out); } catch { /* the ingredients still saved */ }
+}
+
+// Gemini looks up typical prices for the ingredients you spend the most on.
+async function estimatePrices(auto = false) {
+  if (priceBook.estimating || priceBook.ready !== true) return;
+  const use = weeklyUse(), fresh = (p) => p.source === "estimate" && daysLeft(addDays(p.observed_on, PLAN.estimateDays)) >= 0;
+  const need = [...ingredients.values()].filter((i) => (use.get(i.id) || 0) > 0 && !priceBook.points.some((p) => p.ingredient_id === i.id && fresh(p)))
+    .sort((a, b) => use.get(b.id) * b.cost - use.get(a.id) * a.cost).slice(0, 24);
+  if (!need.length) { if (!auto) { priceBook.msg = "Every ingredient you use already has a recent estimate."; renderPricing(); } return; }
+  priceBook.estimating = true; priceBook.msg = `Looking up typical prices near ${esc(rest.city || "you")} for ${need.length} ingredients. This takes about 30 seconds…`; renderPricing();
+  // Small batches, three at a time: each answer stays well inside Gemini's and Vercel's time limits,
+  // and one slow batch doesn't lose the others.
+  const batches = [];
+  for (let i = 0; i < need.length; i += 8) batches.push(need.slice(i, i + 8));
+  const names = { distributor: "Typical distributor", wholesale: "Typical wholesale club", local: "Typical farmers market" };
+  const rows = [], sources = [], problems = [];
+  try {
+    const { data } = await sb.auth.getSession();
+    const ask = async (batch) => {
+      const r = await fetch("/api/specials", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token || ""}` },
+        body: JSON.stringify({ action: "prices", where: [rest.city, rest.state].filter(Boolean).join(", "), today: dayStr(new Date()), items: batch.map((i) => ({ name: i.name, unit: i.unit, cost: i.cost })) }) });
+      const out = await r.json().catch(() => ({}));
+      if (r.status === 503 || r.status === 404) throw Object.assign(new Error("not_configured"), { code: "not_configured" });
+      if (!r.ok) throw new Error(out.error || (r.status === 504 ? "The lookup took too long." : `Error ${r.status}`));
+      for (const x of out.items || []) {
+        const ing = batch.find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
+        if (!ing) continue;
+        for (const k of ["distributor", "wholesale", "local"]) if (x[k]?.price > 0) rows.push({ restaurant_id: rest.id, ingredient_id: ing.id, item_name: ing.name, supplier: names[k], supplier_type: k,
+          unit: ing.unit, unit_cost: x[k].price, low_cost: x[k].low, high_cost: x[k].high, source: "estimate", observed_on: dayStr(new Date()), note: [x.note, ...(out.sources || []).slice(0, 2).map((s) => s.uri)].filter(Boolean).join(" | ").slice(0, 500) });
+      }
+      sources.push(...(out.sources || []));
+    };
+    const results = await Promise.allSettled(batches.map(ask));
+    const failed = results.filter((x) => x.status === "rejected");
+    if (failed.some((x) => x.reason?.code === "not_configured")) { priceBook.msg = "Price estimates use the Gemini helper, which isn't connected yet (see the README's Specials section)."; return; }
+    problems.push(...new Set(failed.map((x) => String(x.reason?.message || x.reason))));
+    if (!rows.length) { priceBook.msg = `Couldn't look up prices: ${esc(problems.join(" ") || "no answer")} Try again in a minute.`; return; }
+    await addPricePoints(rows);
+    const uniq = [...new Map(sources.map((s) => [s.uri, s])).values()].slice(0, 3);
+    priceBook.msg = `Added estimated prices for ${new Set(rows.map((r) => r.ingredient_id)).size} ingredients${uniq.length ? `, checked with Google Search (${uniq.map((s) => `<a href="${esc(s.uri)}" target="_blank" rel="noopener">${esc(s.title || "source")}</a>`).join(", ")})` : ""}.` +
+      (failed.length ? ` ${failed.length} of ${batches.length} lookups didn't answer; click Estimate missing prices to try those again.` : "") +
+      " Estimates are a starting point: real prices from invoices, receipts and quotes replace them.";
+  } catch { priceBook.msg = "Couldn't reach the price lookup. Check your internet and try again."; }
+  finally { priceBook.estimating = false; renderPricing(); }
+}
+
+// Demo only: a believable price history for a sample restaurant.
+async function fillSamplePrices() {
+  const day = (n) => addDays(dayStr(new Date()), -n);
+  const club = proc.sources?.find((s) => s.type === "wholesale")?.name || "Costco Wholesale";
+  const fish = proc.sources?.find((s) => s.type === "local" && s.kind === "seafood")?.name || "Local seafood market";
+  const market = proc.sources?.find((s) => s.type === "local" && s.kind === "market")?.name || "Farmers market";
+  const rows = [];
+  const add = (i, supplier, type, cost, source, ago) => rows.push({ restaurant_id: rest.id, ingredient_id: i.id, item_name: i.name, supplier, supplier_type: type, unit: i.unit,
+    unit_cost: Math.round(cost * 10000) / 10000, source, observed_on: day(ago), note: "Sample price for the demo" });
+  for (const i of ingredients.values()) add(i, "Sysco", "distributor", i.cost, "invoice", 9);
+  const club_ = { wing: 0.82, chuck: 0.88, potato: 0.78, cheddar: 0.85, cream: 0.9, egg: 0.8, bacon: 0.9, lemon: 0.75 };
+  const local_ = { tomato: 1.25, lettuce: 1.2, leek: 1.1, chive: 1.15 };
+  for (const i of ingredients.values()) {
+    const n = i.name.toLowerCase();
+    for (const [w, f] of Object.entries(club_)) if (n.includes(w)) add(i, club, "wholesale", i.cost * f, "quote", 5);
+    for (const [w, f] of Object.entries(local_)) if (n.includes(w)) add(i, market, "local", i.cost * f, "quote", 3);
+    if (/\bcod\b/.test(n)) add(i, fish, "local", i.cost * 0.94, "quote", 4);
+  }
+  try { await addPricePoints(rows); priceBook.msg = `Added ${rows.length} sample prices: last week's Sysco invoice for everything, plus a few quotes from ${esc(club)}, ${esc(market)} and ${esc(fish)}.`; renderPricing(); } catch { /* toast shown */ }
+}
+
 // ---------------------------------------------------------- Tonight
 // The home page: what needs the manager tonight ("On the pass") and how the
 // week is going, as order tickets hanging from a gold rail. Uses real costs
@@ -1406,9 +2082,12 @@ async function scanInvoice(file) {
     invoiceDraft = { supplier: inv.supplier || "", date: base, rows: inv.items.map((x) => {
       const match = findIngredient(x.existing || "") && x.existing ? findIngredient(x.existing) : [...ingredients.values()].find((i) => i.name.toLowerCase() === String(x.name).toLowerCase());
       const days = Number(x.shelf_life_days);
+      const qty = Number(x.quantity) || 0, total = Number(x.line_total) || 0;
       return { use: true, name: match ? match.name : String(x.name || "").trim(), unit: match ? match.unit : String(x.unit || "each"),
-        qty: Number(x.quantity) || 0, cost: Math.round((Number(x.unit_cost) || 0) * 10000) / 10000,
-        useBy: Number.isFinite(days) && days > 0 ? addDays(base, Math.round(days)) : "", low: x.confidence === "low" };
+        qty, total: total || Math.round((Number(x.unit_cost) || 0) * qty * 100) / 100,
+        cost: qty && total ? Math.round((total / qty) * 10000) / 10000 : Math.round((Number(x.unit_cost) || 0) * 10000) / 10000,
+        math: x.math || "", pack: x.pack || "",
+        useBy: Number.isFinite(days) && days > 0 ? addDays(base, Math.round(days)) : "", low: x.confidence === "low" || x.checked === false };
     }) };
     note.textContent = "";
     renderInvoice();
@@ -1439,15 +2118,16 @@ function renderInvoice() {
     <div class="inv-head"><strong>${esc(v.supplier || "Invoice")}</strong> | ${fmtDay(v.date)} | ${v.rows.length} line${v.rows.length === 1 ? "" : "s"} read.${tally} Check them, change anything, then add.</div>
     <datalist id="ingNames">${[...ingredients.values()].map((i) => `<option value="${esc(i.name)}">`).join("")}</datalist>
     <div class="scroll-x"><table class="edit inv-table">
-      <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
+      <thead><tr><th></th><th>Ingredient</th><th></th><th>Unit</th><th class="num">Received</th><th class="num">Line total ($)</th><th class="num">Cost per unit ($)</th>${stockReady ? "<th>Use by</th>" : ""}</tr></thead>
       <tbody>${v.rows.map((x, i) => { const k = known(x.name), old = k ? k.cost : null;
         return `<tr class="${x.use ? "" : "skip"} ${x.low ? "low" : ""}">
         <td><input type="checkbox" data-inv="${i}" data-k="use" ${x.use ? "checked" : ""} aria-label="Include this line"></td>
-        <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient"></td>
+        <td><input data-inv="${i}" data-k="name" value="${esc(x.name)}" list="ingNames" maxlength="100" aria-label="Ingredient">${x.math ? `<div class="inv-math">${esc(x.pack ? `${x.pack}: ` : "")}${esc(x.math)}</div>` : ""}</td>
         <td class="inv-tag">${k ? `<span class="tag-upd">Updates yours</span><span data-chg="${i}">${invoicePriceChange(old, x.cost)}</span>` : `<span class="tag-new">New</span>`}${x.low ? `<span class="inv-low">Check this line</span>` : ""}</td>
         <td style="width:90px"><input data-inv="${i}" data-k="unit" value="${esc(x.unit)}" list="unitList" maxlength="20" aria-label="Unit"></td>
         <td class="num" style="width:110px"><input class="num mono" type="number" min="0" step="0.5" data-inv="${i}" data-k="qty" value="${trimNum(x.qty)}" aria-label="Received"></td>
-        <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
+        <td class="num" style="width:120px"><input class="num mono" type="number" min="0" step="0.01" data-inv="${i}" data-k="total" value="${trimNum(x.total)}" aria-label="Line total"></td>
+        <td class="num" style="width:130px"><input class="num mono" type="number" min="0" step="0.0001" data-inv="${i}" data-k="cost" value="${trimNum(x.cost)}" aria-label="Cost per unit"></td>
         ${stockReady ? `<td style="width:170px"><input type="date" data-inv="${i}" data-k="useBy" value="${esc(x.useBy)}" aria-label="Use by"></td>` : ""}
       </tr>`; }).join("")}</tbody>
     </table></div>
@@ -1473,7 +2153,10 @@ async function saveInvoice() {
       else { delete change.updated_at; await run(sb.from("ingredients").insert({ restaurant_id: rest.id, name: String(x.name).trim(), unit: String(x.unit).trim(), ...change })); added++; }
     }
     await loadRestaurantData();
+    const draft = invoiceDraft;
     invoiceDraft = null;
+    await loadPriceBook();
+    await logInvoicePrices(draft, rows);       // remember what was paid where, for Procurement
     render();
     toast(`From the invoice: ${updated} updated, ${added} added.`);
   } catch { btn.disabled = false; }
@@ -3234,8 +3917,47 @@ async function deleteScenario() {
 }
 
 // ---------------------------------------------------------- Restaurants
+// ---------------------------------------------------------- Address
+// Each restaurant's full address (supabase/address.sql). Street, city, state
+// and ZIP are required for a new restaurant; suite / unit is optional.
+const US_STATES = [["AL", "Alabama"], ["AK", "Alaska"], ["AZ", "Arizona"], ["AR", "Arkansas"], ["CA", "California"], ["CO", "Colorado"], ["CT", "Connecticut"],
+  ["DE", "Delaware"], ["DC", "District of Columbia"], ["FL", "Florida"], ["GA", "Georgia"], ["HI", "Hawaii"], ["ID", "Idaho"], ["IL", "Illinois"], ["IN", "Indiana"],
+  ["IA", "Iowa"], ["KS", "Kansas"], ["KY", "Kentucky"], ["LA", "Louisiana"], ["ME", "Maine"], ["MD", "Maryland"], ["MA", "Massachusetts"], ["MI", "Michigan"],
+  ["MN", "Minnesota"], ["MS", "Mississippi"], ["MO", "Missouri"], ["MT", "Montana"], ["NE", "Nebraska"], ["NV", "Nevada"], ["NH", "New Hampshire"],
+  ["NJ", "New Jersey"], ["NM", "New Mexico"], ["NY", "New York"], ["NC", "North Carolina"], ["ND", "North Dakota"], ["OH", "Ohio"], ["OK", "Oklahoma"],
+  ["OR", "Oregon"], ["PA", "Pennsylvania"], ["RI", "Rhode Island"], ["SC", "South Carolina"], ["SD", "South Dakota"], ["TN", "Tennessee"], ["TX", "Texas"],
+  ["UT", "Utah"], ["VT", "Vermont"], ["VA", "Virginia"], ["WA", "Washington"], ["WV", "West Virginia"], ["WI", "Wisconsin"], ["WY", "Wyoming"]];
+document.querySelectorAll(".state-select").forEach((sel) => {
+  sel.innerHTML = `<option value="">Choose…</option>` + US_STATES.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+});
+const ADDRESS_COLS = ["address_line1", "address_line2", "city", "state", "postal_code"];
+const hasAddressCols = (r) => !!r && "address_line1" in r;
+function readAddress(p) {
+  return { address_line1: $(p + "Street").value.trim(), address_line2: $(p + "Street2").value.trim() || null,
+    city: $(p + "City").value.trim(), state: $(p + "State").value, postal_code: $(p + "Zip").value.trim() };
+}
+function fillAddress(p, r) {
+  $(p + "Street").value = r?.address_line1 || ""; $(p + "Street2").value = r?.address_line2 || "";
+  $(p + "City").value = r?.city || ""; $(p + "State").value = r?.state || ""; $(p + "Zip").value = r?.postal_code || "";
+}
+// A problem with the address in words, or "" if it's fine.
+function addressProblem(a) {
+  if (!a.address_line1) return "Add the street address.";
+  if (!a.city) return "Add the city.";
+  if (!a.state) return "Choose the state.";
+  if (!/^\d{5}(-\d{4})?$/.test(a.postal_code)) return "ZIP should be 5 digits, like 37902.";
+  return "";
+}
+const isMissingAddress = (err) => /42703|PGRST204/.test(err?.code || "") && /address_line|postal_code|city|state/.test(err?.message || "");
+const ADDRESS_SETUP = "One more database step: in Supabase, open SQL Editor, run supabase/address.sql, then try again.";
+function oneLineAddress(r) {
+  if (!r?.address_line1) return "";
+  return `${r.address_line1}${r.address_line2 ? `, ${r.address_line2}` : ""}, ${r.city}, ${r.state} ${r.postal_code}`;
+}
+
 function openOnboarding(canCancel) {
   $("onboardName").value = "";
+  fillAddress("onb", null);
   const sel = $("onboardSeed");
   sel.innerHTML = `<option value="">Blank: I'll add my own menu</option>` +
     Object.entries(window.SEEDS || {}).map(([k, v]) => `<option value="${k}">Sample: ${esc(v.label)}</option>`).join("");
@@ -3252,6 +3974,8 @@ async function createRestaurant(e) {
   const name = $("onboardName").value.trim();
   if (!name) return;
   const msg = $("onboardMsg"), btn = $("onboardSubmit");
+  const address = readAddress("onb"), bad = addressProblem(address);
+  if (bad) { msg.className = "form-msg"; msg.textContent = bad; return; }
   btn.disabled = true;
   msg.className = "form-msg ok";
   msg.textContent = "Creating your restaurant…";
@@ -3259,8 +3983,11 @@ async function createRestaurant(e) {
   try {
     const seedKey = $("onboardSeed").value;
     const t = window.SEEDS?.[seedKey]?.targets;
-    const row = t ? { name, target_low: t.low, target_mid: t.mid, target_high: t.high } : { name };
-    created = await run(sb.from("restaurants").insert(row).select("*").single());
+    const row = { name, ...address, ...(t ? { target_low: t.low, target_mid: t.mid, target_high: t.high } : {}) };
+    const res = await sb.from("restaurants").insert(row).select("*").single();
+    if (res.error && isMissingAddress(res.error)) { msg.className = "form-msg"; msg.textContent = ADDRESS_SETUP; return; }
+    if (res.error) throw res.error;
+    created = res.data;
     if (seedKey) {
       msg.textContent = "Loading the sample menu (a few seconds)…";
       await seedRestaurant(created.id, seedKey);
@@ -3276,6 +4003,10 @@ async function createRestaurant(e) {
 
 function openSettings() {
   $("setName").value = rest.name;
+  // The address section shows once supabase/address.sql has been run.
+  $("setAddress").classList.toggle("hidden", !hasAddressCols(rest));
+  $("setAddress").querySelectorAll("input:not(#setStreet2), select").forEach((x) => { x.required = hasAddressCols(rest); });
+  fillAddress("set", rest);
   $("setLow").value = Number(rest.target_low);
   $("setMid").value = Number(rest.target_mid);
   $("setHigh").value = Number(rest.target_high);
@@ -3300,6 +4031,11 @@ async function saveSettings(e) {
   if (![low, mid, high].every((n) => Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Targets must be between 0 and 100."; return; }
   if (!(low <= mid && mid <= high)) { $("settingsMsg").textContent = "Targets must go low ≤ mid ≤ high."; return; }
   const changes = { name, target_low: low, target_mid: mid, target_high: high };
+  if (hasAddressCols(rest)) {
+    const address = readAddress("set"), bad = addressProblem(address);
+    if (bad) { $("settingsMsg").textContent = bad; return; }
+    Object.assign(changes, address);
+  }
   if (LABOR_ON && "labor_low" in rest) {
     const ll = Number($("setLaborLow").value), lm = Number($("setLaborMid").value), lh = Number($("setLaborHigh").value), lb = Number($("setBurden").value);
     if (![ll, lm, lh, lb].every((n) => $("setLaborLow").value !== "" && Number.isFinite(n) && n >= 0 && n <= 100)) { $("settingsMsg").textContent = "Labor targets and the add-on must be between 0 and 100."; return; }
@@ -3467,6 +4203,29 @@ function wireControls() {
   darkQuery?.addEventListener?.("change", applyTheme);
   $("signOutBtn").addEventListener("click", () => { closeMenu(); signOut(); });
   $("settingsBtn").addEventListener("click", () => { closeMenu(); openSettings(); });
+
+  // Procurement
+  $("page-procurement").addEventListener("click", (e) => {
+    if (e.target.closest("#procAddAddress")) { openSettings(); return; }
+    const c = e.target.closest("[data-proc-cat]");
+    if (c) { proc.cat = c.dataset.procCat; renderProcurement(); return; }
+    const go = e.target.closest("[data-proc-go]");
+    if (go) procFocus(go.dataset.procGo);
+    const ppAdd = e.target.closest("[data-pp-add]");
+    if (ppAdd) { priceBook.addFor = ppAdd.dataset.ppAdd; priceBook.addWhere = ppAdd.dataset.ppWhere || ""; renderPricing(); document.querySelector(`[data-pp-form="${ppAdd.dataset.ppAdd}"] input[name=${priceBook.addWhere ? "price" : "where"}]`)?.focus(); return; }
+    if (e.target.closest("[data-pp-cancel]")) { priceBook.addFor = null; renderPricing(); return; }
+    if (e.target.closest("#ppEstimate")) { estimatePrices(); return; }
+    if (e.target.closest("#ppSample")) { e.target.closest("#ppSample").disabled = true; fillSamplePrices(); return; }
+    if (e.target.closest("#procRetry")) { proc.loadingFor = ""; proc.sources = null; proc.found = {}; procLoad(); }
+  });
+  $("page-procurement").addEventListener("submit", (e) => {
+    const f = e.target.closest("[data-pp-form]");
+    if (f) { e.preventDefault(); savePriceForm(f); }
+  });
+  $("page-procurement").addEventListener("change", (e) => {
+    if (e.target.id === "procRadius") { proc.radius = Number(e.target.value); renderProcurement(); }
+    else if (e.target.dataset.procType) { e.target.checked ? proc.show.add(e.target.dataset.procType) : proc.show.delete(e.target.dataset.procType); if (proc.sources) procDrawSources(); }
+  });
   $("restaurantSelect").addEventListener("change", (e) => {
     const v = e.target.value;
     if ((draftDirty || modDirty) && !confirm("You have unsaved changes. Switch anyway?")) { e.target.value = rest.id; return; }
@@ -3570,8 +4329,15 @@ function wireControls() {
   $("invoiceFile").addEventListener("change", (e) => scanInvoice(e.target.files[0]));
   $("invoiceResult").addEventListener("input", (e) => {
     const t = e.target; if (t.dataset.inv === undefined || !invoiceDraft) return;
-    invoiceDraft.rows[+t.dataset.inv][t.dataset.k] = t.type === "checkbox" ? t.checked : t.value;
-    if (t.dataset.k === "cost") {                                   // keep the arrow in step while typing a price
+    const row = invoiceDraft.rows[+t.dataset.inv], k = t.dataset.k;
+    row[k] = t.type === "checkbox" ? t.checked : t.value;
+    // Cost per unit = line total / amount received. Change the amount or the total and the cost follows;
+    // change the cost and the total follows.
+    const q = Number(row.qty), tot = Number(row.total), c = Number(row.cost);
+    const put = (key, v) => { row[key] = v; const box = document.querySelector(`#invoiceResult [data-inv="${t.dataset.inv}"][data-k="${key}"]`); if (box) box.value = trimNum(v); };
+    if ((k === "qty" || k === "total") && q > 0 && tot >= 0) put("cost", Math.round((tot / q) * 10000) / 10000);
+    else if (k === "cost" && q > 0 && c >= 0) put("total", Math.round(c * q * 100) / 100);
+    if (["cost", "qty", "total"].includes(t.dataset.k)) {           // keep the arrow in step with the cost per unit
       const row = invoiceDraft.rows[+t.dataset.inv], k = invoiceKnown(row.name), chg = $("invoiceResult").querySelector(`[data-chg="${t.dataset.inv}"]`);
       if (chg && k) chg.innerHTML = invoicePriceChange(k.cost, row.cost);
     }

@@ -56,6 +56,7 @@ module.exports = async function handler(req, res) {
   if (size > MAX_BODY) return res.status(413).json({ error: "Too much data in one request." });
   if (body.action === "image") return makeImage(body, key, res);
   if (body.action === "vibe") return readVibe(body, key, res);
+  if (body.action === "prices") return estimatePrices(body, key, res);
   if (!Array.isArray(body.pantry) || !body.pantry.length) return res.status(400).json({ error: "Add some ingredients first." });
   const mode = ["party", "event", "free"].includes(body.mode) ? body.mode : "weekly";
 
@@ -206,12 +207,15 @@ Read every product line. Skip taxes, fuel surcharges, delivery fees, deposits an
 Our ingredient list (name, the unit we cost it in, current cost):
 ${ours || "- (empty)"}
 
-For each product line:
+For each product line, copy what is PRINTED. Don't do the math; the app does it.
 - "name": a short, plain ingredient name. If it is the same product as one on our list, set "existing" to that exact name from our list and use it as "name" too. Otherwise leave "existing" empty.
-- "unit" and the numbers: if it matches one of ours, convert to OUR unit (1 lb = 16 oz, 1 kg = 35.27 oz, 1 gal = 128 fl oz, 1 case = the count or weight printed on the line). Otherwise pick a sensible unit (oz, lb, each, fl oz, gal, bottle).
-- "quantity": how much was delivered, in that unit.
-- "unit_cost": the price per ONE of that unit (line total divided by quantity), in dollars.
-- "line_total": the line's total in dollars as printed.
+- "cases": how many were SHIPPED or delivered (the shipped / delivered quantity column, not "ordered" if they differ), counted in whatever the line sells by: cases, boxes, bags, bottles, each.
+- "pack_count", "pack_size", "pack_unit": what ONE of those contains, from the pack or size column. "6/10 LB" means pack_count 6, pack_size 10, pack_unit "lb". "4/1 GAL" means 4, 1, "gal". "24/12 OZ" means 24, 12, "oz". "30 DZ" means 30, 1, "dozen". "1/750 ML" means 1, 750, "ml". A single item with no pack (one 10 lb bag) means 1, 10, "lb". Sold loose by weight ("12.4 LB" in the quantity column) means cases 12.4, pack_count 1, pack_size 1, pack_unit "lb". Sold by the each: pack_unit "each".
+- "pack": the pack / size text exactly as printed, like "6/10 LB".
+- "unit_price": the printed price per case (or per pound if sold by weight).
+- "line_total": the line's total (extended price) in dollars as printed.
+- "unit": the unit we should cost it in: OUR unit if it matches one of ours, otherwise a sensible one (oz, lb, each, fl oz, gal, bottle).
+- "quantity" and "unit_cost": your best guess of the total delivered in "unit", and the cost per one "unit". The app checks these against the pack math.
 - "shelf_life_days": how many days it usually keeps from delivery, stored properly (fresh fish 2, fresh meat 4, leafy greens 5, other produce 7, dairy 10, eggs 21, frozen 90, dry goods and canned 180, beer 120, wine and liquor 365).
 - "confidence": "high" if the line was easy to read, otherwise "low".
 Also give the supplier's name and the invoice date (YYYY-MM-DD) if they're printed.`;
@@ -233,6 +237,7 @@ Also give the supplier's name and the invoice date (YYYY-MM-DD) if they're print
     let inv;
     try { inv = JSON.parse(text); } catch { return res.status(502).json({ error: "Couldn't read that invoice. Try a clearer, straight-on photo." }); }
     if (!inv || !Array.isArray(inv.items) || !inv.items.length) return res.status(422).json({ error: "No product lines found. Try a clearer, straight-on photo of the whole invoice." });
+    inv.items = inv.items.map((x) => withPackMath(x, b.ingredients));
     return res.status(200).json({ model, invoice: inv });
   } catch {
     return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
@@ -321,6 +326,58 @@ Colors are 6-digit hex codes. ${owner.length ? `The owner's colors are ${owner.j
 
 // Gives up after "ms" (an AbortError), so the function always answers before
 // Vercel's 60-second limit instead of being cut off with no message.
+// The quantity math, done here instead of trusted to the AI:
+// delivered = cases x items per case x size of each, converted to the unit
+// the ingredient is costed in; cost per unit = line total / delivered.
+const WEIGHT = { oz: 1, ounce: 1, ounces: 1, lb: 16, lbs: 16, pound: 16, pounds: 16, kg: 35.274, g: 0.035274, gram: 0.035274, grams: 0.035274 };
+const VOLUME = { "fl oz": 1, floz: 1, gal: 128, gallon: 128, gallons: 128, qt: 32, quart: 32, pt: 16, pint: 16, cup: 8, l: 33.814, liter: 33.814, litre: 33.814, ml: 0.033814 };
+const COUNT = { each: 1, ea: 1, ct: 1, count: 1, pc: 1, pcs: 1, piece: 1, bottle: 1, btl: 1, can: 1, dozen: 12, dz: 12, doz: 12 };
+function unitKind(u) {
+  u = String(u || "").trim().toLowerCase().replace(/\.$/, "");
+  for (const [kind, table] of [["w", WEIGHT], ["v", VOLUME], ["c", COUNT]]) if (u in table) return { kind, per: table[u] };
+  return null;
+}
+function convert(amount, from, to) {
+  const a = unitKind(from), b = unitKind(to);
+  if (!a || !b) return null;
+  // Kitchens cost liquids in "oz": treat a fluid ounce and an ounce as the same.
+  const liquid = (a.kind === "w" && b.kind === "v") || (a.kind === "v" && b.kind === "w");
+  if (a.kind !== b.kind && !liquid) return null;
+  return (amount * a.per) / b.per;
+}
+const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+function withPackMath(x, ours) {
+  const mine = (Array.isArray(ours) ? ours : []).find((i) => String(i.name).toLowerCase() === String(x.existing || x.name || "").toLowerCase());
+  const unit = mine ? mine.unit : x.unit || x.pack_unit || "each";
+  const cases = Number(x.cases), count = Number(x.pack_count) || 1, size = Number(x.pack_size) || 1, total = Number(x.line_total);
+  const out = { ...x, unit };
+  if (cases > 0) {
+    const inPackUnit = cases * count * size;
+    const delivered = convert(inPackUnit, x.pack_unit || "each", unit);
+    if (delivered && delivered > 0) {
+      out.quantity = round(delivered, 2);
+      const lineTotal = total > 0 ? total : Number(x.unit_price) > 0 ? cases * Number(x.unit_price) : 0;
+      if (lineTotal > 0) { out.line_total = round(lineTotal, 2); out.unit_cost = round(lineTotal / delivered, 4); }
+      const n = (v) => round(v, 2).toLocaleString("en-US");
+      const pu = String(x.pack_unit || "each").toLowerCase();
+      // e.g. "2 × 10 lb = 20 lb = 320 oz", "1 × 30 dozen = 360 each", "6 each"
+      const multiplied = count > 1 || size !== 1;
+      const sameScale = Math.abs(delivered - inPackUnit) < 1e-9;
+      out.math = `${n(cases)}${count > 1 ? ` × ${n(count)}` : ""}${size !== 1 ? ` × ${n(size)}` : ""} ${pu}` +
+        (multiplied ? ` = ${n(inPackUnit)} ${pu}` : "") +
+        (sameScale ? "" : ` = ${n(delivered)} ${unit}`);
+      out.checked = true;
+      return out;
+    }
+  }
+  // Couldn't do the pack math (say, a case of "each" costed by the pound): use the AI's numbers, flagged.
+  const q = Number(x.quantity);
+  if (q > 0 && total > 0) out.unit_cost = round(total / q, 4);
+  out.checked = false;
+  out.confidence = "low";
+  return out;
+}
+
 async function callGemini(model, payload, key, ms = 50000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
@@ -465,6 +522,95 @@ const IDEAS_SCHEMA = {
   required: ["ideas"],
 };
 
+// ---------------------------------------------------------------- price estimates
+// Typical prices for a restaurant's top ingredients at three kinds of places
+// near it (broadline distributor, warehouse club, farmers market / local farm),
+// looked up with Google Search, then written out in the restaurant's own units.
+// These are estimates to fill gaps until real prices come in from invoices,
+// receipts and quotes; the app labels them that way.
+async function estimatePrices(b, key, res) {
+  // Small batches (the page sends 8 at a time) keep each answer well inside the time limit.
+  const items = (Array.isArray(b.items) ? b.items : []).slice(0, 10)
+    .map((i) => ({ name: clip(i.name, 80), unit: clip(i.unit, 20), cost: Number(i.cost) || 0 })).filter((i) => i.name && i.unit);
+  if (!items.length) return res.status(400).json({ error: "No ingredients to price." });
+  const where = clip(b.where, 120) || "the United States";
+  const list = items.map((i) => `- ${i.name} (we cost it per ${i.unit}; we pay about $${i.cost.toFixed(2)} per ${i.unit} now)`).join("\n");
+  try {
+    const model = await pickModel(key);
+    // Gemini 3 "thinks" before answering; a quick price lookup doesn't need much of that.
+    const quick = /gemini-3/i.test(model) ? { thinkingConfig: { thinkingLevel: "low" } } : null;
+    // 1. Look up current typical prices.
+    let facts = "", sources = [];
+    try {
+      const r = await callGemini(model, {
+        contents: [{ role: "user", parts: [{ text: `A small restaurant in ${where} wants to compare what it pays for ingredients. Today is ${clip(b.today)}.
+For each item below, find current typical prices in or near ${where} at:
+(a) broadline foodservice distributors like Sysco or US Foods (case prices),
+(b) warehouse clubs like Costco, Sam's Club or Restaurant Depot,
+(c) farmers markets or local farms (only for fresh produce, meat, eggs, dairy, bread).
+Use USDA Market News reports, store websites and recent price reports. Short bullet points with dollar prices and the pack size or unit, facts only.
+${list}` }] }],
+        tools: [{ google_search: {} }],
+        ...(quick ? { generationConfig: quick } : {}),
+      }, key, 15000);
+      if (r.ok) {
+        const data = await r.json();
+        const cand = data?.candidates?.[0];
+        facts = (cand?.content?.parts || []).map((p) => p.text || "").join("").trim().slice(0, 6000);
+        sources = (cand?.groundingMetadata?.groundingChunks || []).map((c) => c.web).filter((w) => w && w.uri)
+          .slice(0, 6).map((w) => ({ title: String(w.title || "").slice(0, 80), uri: w.uri }));
+      }
+    } catch { /* no search results: estimate from general knowledge */ }
+    // 2. Turn them into numbers in the restaurant's units.
+    const priceAsk = (cfg) => callGemini(model, {
+      contents: [{ role: "user", parts: [{ text: `Estimate the typical price of each item at three kinds of places near ${where}: "distributor" (Sysco / US Foods case price), "wholesale" (Costco / Sam's Club / Restaurant Depot), "local" (farmers market or local farm).
+Give every price per ONE of the unit we cost the item in (convert pack and case prices: 1 lb = 16 oz, 1 gal = 128 fl oz, treat fl oz and oz the same for liquids, 1 dozen = 12 each).
+Give a low and high for the usual range. Set a place to null if that kind of place doesn't sell it (alcohol is only sold to restaurants by licensed distributors; dry goods aren't sold at farmers markets).
+Be realistic, not optimistic. Warehouse clubs are usually a little cheaper than distributors for staples but sell bigger packs; farmers markets are usually more expensive but fresher.
+${facts ? `Prices found with a web search:\n${facts}\n` : ""}
+Items:
+${list}` }] }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: PRICE_SCHEMA, ...(cfg || {}) },
+    }, key, 35000);   // both steps together stay under Vercel's 60-second limit
+    let r = await priceAsk(quick);
+    if (r.status === 400 && quick) r = await priceAsk(null);   // a model that doesn't take the "think less" setting
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = String(data?.error?.message || "");
+      if (r.status === 429) return res.status(429).json({ error: "Gemini is busy or out of quota. Try again in a minute." });
+      return res.status(502).json({ error: msg || `Gemini returned an error (${r.status}).` });
+    }
+    const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    let out;
+    try { out = JSON.parse(text); } catch { return res.status(502).json({ error: "Gemini's answer came back garbled. Try again." }); }
+    const ok = (p) => p && Number(p.price) > 0 ? { price: Number(p.price), low: Number(p.low) > 0 ? Number(p.low) : null, high: Number(p.high) > 0 ? Number(p.high) : null } : null;
+    const rows = (Array.isArray(out?.items) ? out.items : []).map((x) => ({ name: clip(x.name, 80), distributor: ok(x.distributor), wholesale: ok(x.wholesale), local: ok(x.local), note: clip(x.note, 200) }));
+    return res.status(200).json({ model, items: rows, sources });
+  } catch (e) {
+    if (e?.name === "AbortError") return res.status(504).json({ error: "Gemini took too long to answer. Try again." });
+    return res.status(502).json({ error: "Couldn't reach Gemini. Try again in a minute." });
+  }
+}
+const PRICE_ONE = { type: "OBJECT", nullable: true, properties: { price: { type: "NUMBER" }, low: { type: "NUMBER" }, high: { type: "NUMBER" } }, required: ["price"] };
+const PRICE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    items: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          name: { type: "STRING", description: "Exactly as given" },
+          distributor: PRICE_ONE, wholesale: PRICE_ONE, local: PRICE_ONE,
+          note: { type: "STRING", description: "A few words on pack size or what drives the price" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  required: ["items"],
+};
+
 const INVOICE_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -477,6 +623,12 @@ const INVOICE_SCHEMA = {
         properties: {
           name: { type: "STRING" },
           existing: { type: "STRING", description: "Exact name from our ingredient list, or empty" },
+          cases: { type: "NUMBER", description: "How many were shipped, in the line's selling unit (cases, bags, each, or pounds if sold by weight)" },
+          pack_count: { type: "NUMBER", description: "Items inside one case (6 in 6/10 LB); 1 if none" },
+          pack_size: { type: "NUMBER", description: "Size of each item (10 in 6/10 LB); 1 if sold by the each" },
+          pack_unit: { type: "STRING", description: "Unit of pack_size: lb, oz, kg, g, gal, qt, pt, fl oz, l, ml, dozen or each" },
+          pack: { type: "STRING", description: "Pack / size text as printed" },
+          unit_price: { type: "NUMBER", description: "Printed price per case (or per pound if sold by weight)" },
           unit: { type: "STRING" },
           quantity: { type: "NUMBER" },
           unit_cost: { type: "NUMBER" },
