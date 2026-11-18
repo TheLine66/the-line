@@ -217,12 +217,15 @@ This makes sure any email links (for example, password resets) send people to yo
 | **Recipes** | Add a dish, change its price, or add and remove ingredients, then click **Save dish** |
 | **Labor Costs** *(put away for now: set `LABOR_ON = true` near the top of the page list in `app.js` to bring it back)* | Add your team and their pay, enter hours each week, and see labor cost as a % of sales (like food cost %, with a target range, prime cost, overtime and a suggested action) |
 | **MOD Report** | The manager on duty fills one in every shift: weather, covers by hour (peak times are highlighted), staffing, employee and guest issues, comps and voids, 86'd items, maintenance, cash and closing checks, tomorrow's forecast, and notes. **Print / save as PDF** makes a clean copy to share. |
+| **Procurement** | A map of where to buy around the restaurant's address (needs the address in Settings): large distributors like Sysco and US Foods, wholesale clubs like Costco, and local farmers markets, farm stands, butchers, seafood and produce shops. Pick an ingredient group (produce, meat, seafood…) to see only the places that sell it; 86'd and spoiling items are flagged. Places come from Google Maps (setup under "Procurement (Google Maps)" below). |
 
 **The what-if bar** (on Cost Tracker and Performance) works like it did in your prototype. You can now also click **Save** to keep a scenario like "Beef +15%", and reload it later from the **Saved scenarios** menu.
 
 **Multiple restaurants:** use the dropdown at the top right and choose **+ Add another restaurant**. Each person who signs up gets their **own separate restaurants**. Nobody can see anyone else's.
 
 **Settings:** change the restaurant name or your target food-cost range (28 / 32 / 35% by default).
+
+**Restaurant addresses need five more columns.** If you set up your database before addresses existed, run `supabase/address.sql` once in the SQL Editor (same steps as Step 3). New restaurants then ask for the full address, and existing ones can add theirs under **Settings**.
 
 **Labor Costs and MOD Report need three more tables.** If you set up your database before these tabs existed, run `supabase/labor-and-mod.sql` once in the SQL Editor (same steps as Step 3). Until you do, the rest of the app works normally and those two tabs show a reminder. Labor targets (25 / 28 / 32% of sales by default) and the payroll taxes and benefits add-on (10%) are in **Settings**.
 
@@ -255,6 +258,8 @@ Your key is like a password. **Never** put it in a file, in GitHub, or in a chat
 
 3. Go to **Deployments**, click the **⋯** next to the newest one, and choose **Redeploy**. Vercel only picks up new settings on a fresh deploy.
 
+> **Testing a branch?** Vercel gives each branch its own *Preview* link, and Preview doesn't get these keys unless you tick it. When you add or edit each of the three, tick **Production** *and* **Preview**, then redeploy the branch. Otherwise Specials, invoice scanning and menu scanning say the Gemini helper isn't connected.
+
 ### Step C: Use it
 Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day / event** or **Anything goes**, fill in the boxes, and click **Make the menu**. It takes a few seconds. Don't like it? Click **Try another version**: it's told what it already suggested, so you get new dishes. **Print the menu** gives you a clean copy.
 
@@ -271,6 +276,35 @@ Open **Specials**, pick **Weekly specials**, **Party or group menu**, **Game day
 - **Pictures need billing:** Google's picture model only works once billing is turned on for your key (Google AI Studio → **Billing**). Each picture costs about 4 cents. Until then the button explains this, and **Add your own picture** still works. To pick a specific picture model, add `GEMINI_IMAGE_MODEL`.
 - **Cost:** each menu is one small request to Gemini. Check your usage and limits in Google AI Studio.
 - **Always look it over:** the AI can suggest odd pairings, or ingredients you don't stock (the page flags those).
+
+## Procurement (Google Maps)
+
+The **Procurement** page puts the restaurant on a Google map and searches Google Maps around it for distributors (Sysco, US Foods, Performance Foodservice, Gordon Food Service), wholesale clubs (Costco, Sam's Club, Restaurant Depot, BJ's) and local farmers markets, farm stands, butchers, seafood, produce and cheese shops. It needs the restaurant's address (run `supabase/address.sql`, then fill it in under **Settings**) and one Google Maps key.
+
+### Step A: Get a Google Maps key (once)
+1. Go to **console.cloud.google.com** and sign in. Make a project (top bar → project picker → **New project**, name it "The Line").
+2. **Billing:** left menu → **Billing** → link a billing account. Google asks for a card, but its free monthly allowance covers a class demo, so this should cost $0. You can also set a budget alert there.
+3. **Turn on two APIs:** left menu → **APIs & Services** → **Library**. Search for and **Enable** both **Maps JavaScript API** and **Places API (New)**.
+4. **Make the key:** **APIs & Services** → **Credentials** → **Create credentials** → **API key**. Copy it.
+5. **Lock the key to your site** (it's used in the browser, so this is what keeps others from using it): click the key → **Application restrictions** → **Websites** → add `https://the-line-ten.vercel.app/*` (your live site) and `https://the-line-git-procurement-the-line2.vercel.app/*` (the Procurement branch preview). Each new branch gets its own preview address, so add a line for any branch you want the map to work on. Under **API restrictions** → **Restrict key** → choose **Maps JavaScript API** and **Places API (New)** → **Save**.
+
+### Step B: Give Vercel the key (once)
+1. **vercel.com** → the **the-line** project → **Settings** → **Environment Variables**.
+2. Add `GOOGLE_MAPS_KEY` with the key as the value, for all environments, and **Save**.
+3. **Deployments** → **⋯** next to the newest one → **Redeploy**.
+
+- **Cost:** each time the page searches a new area it makes 14 small searches. Google's free monthly allowance covers hundreds of those; results are kept while the page is open, so switching tabs doesn't search again.
+- **If it says "Google Maps isn't connected yet":** `GOOGLE_MAPS_KEY` is missing in Vercel, or you haven't redeployed since adding it.
+- **If it says "Google rejected the Maps key":** check Step A, points 3 and 5 (both APIs turned on, and your site's address on the key's list).
+
+### Smartest places to buy and the price book
+Below the map, **Smartest Places to Buy** suggests where to buy each food group (seafood, meat, produce…) and how much that would save a week. It needs one more table: run `supabase/prices.sql` once in the SQL Editor.
+
+- **Where prices come from, with no phone calls:** every scanned invoice or store receipt adds its prices on its own; **+ Price** in the **Price Book** saves a quote or shelf price; and **Estimate missing prices** has Gemini (with Google Search) look up typical prices near you for what you spend the most on. Real prices always win over estimates, and the **How sure** dots show which a suggestion is based on (●●● mostly your real prices, ●○○ estimates only).
+- **How it decides:** for each food group, what you use a week (recipes × last week's sales) × the price at each kind of place, plus the drive (70¢ a mile and $18 an hour of staff time, once a week, shared across everything bought there) and a little extra for perishables in bulk packs. A trip that costs more than it saves isn't suggested. The exact numbers are under **How this is figured** on the page, and in `PLAN` near the top of the price book code in `app.js`.
+- **One price per ingredient per place:** a newer price from the same place replaces the old one ("Costco", "Costco Wholesale" and a receipt's "COSTCO WHOLESALE #1145" count as one place), different places are all kept, and an older price never replaces a newer one.
+- **Price checks worth doing** lists the one to three prices most worth checking next time someone's at a store, by how much they could save.
+- **Fill sample prices (demo)** appears when a restaurant has no prices yet, and adds a believable invoice and a few quotes for a class demo. They're marked as samples.
 
 ## The Line POS (paid add-on)
 
