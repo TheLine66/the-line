@@ -487,17 +487,28 @@ function computeAll() {
 const LABOR_ON = false;
 
 const PAGE_NAMES = { home: "Tonight", cost: "Cost Tracker", perf: "Performance", sales: "Weekly Sales", ingredients: "Ingredients",
-  recipes: "Recipes", specials: "Specials", labor: "Labor Costs", mod: "MOD Report" };
+  recipes: "Recipes", specials: "Specials", forecast: "Demand Forecaster", labor: "Labor Costs", mod: "MOD Report" };
 if (!LABOR_ON) delete PAGE_NAMES.labor;
 
 // Which pages show as tabs in the row under the logo. Saved in this
 // browser; every page is always reachable from the Menu.
 const TABS_KEY = "line.tabs";
-const DEFAULT_TABS = ["cost", "perf", "specials", "labor", "mod"].filter((p) => p in PAGE_NAMES);
+const DEFAULT_TABS = ["cost", "perf", "specials", "forecast", "labor", "mod"].filter((p) => p in PAGE_NAMES);
+// Pages added after someone saved their tab choice: pinned once, then theirs to unpin.
+const NEW_TABS = ["forecast"];
 function pinnedTabs() {
   try {
     const v = JSON.parse(safeGet(TABS_KEY) || "null");
-    if (Array.isArray(v)) return v.filter((p) => p in PAGE_NAMES);
+    if (Array.isArray(v)) {
+      const seen = JSON.parse(safeGet(TABS_KEY + ".seen") || "[]");
+      const add = NEW_TABS.filter((p) => !seen.includes(p) && !v.includes(p) && p in PAGE_NAMES);
+      if (add.length) {
+        v.push(...add);
+        safeSet(TABS_KEY, JSON.stringify(Object.keys(PAGE_NAMES).filter((p) => v.includes(p))));
+      }
+      if (NEW_TABS.some((p) => !seen.includes(p))) safeSet(TABS_KEY + ".seen", JSON.stringify(NEW_TABS));
+      return v.filter((p) => p in PAGE_NAMES);
+    }
   } catch { /* fall through */ }
   return DEFAULT_TABS.slice();
 }
@@ -554,6 +565,7 @@ function render() {
   else if (activePage === "ingredients") renderIngredients();
   else if (activePage === "recipes") renderRecipes();
   else if (activePage === "specials") renderSpecials();
+  else if (activePage === "forecast") renderForecast();
   else if (activePage === "labor") renderLabor();
   else if (activePage === "mod") renderMod();
 }

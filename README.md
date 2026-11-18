@@ -29,6 +29,7 @@ You'll make three free accounts, connect them, and you're done.
 | `images/kitchen.jpg` | The kitchen photo behind the sign-in screen (upload it with the other files) | Only to swap the photo |
 | `api/specials.js` | The server helper that talks to Google Gemini for the Specials page. Your Gemini key lives in Vercel's settings, not here | No |
 | `app.js` | All the brains: math, saving, loading | No |
+| `forecast.js` | The Demand Forecaster page: predicts plates per dish for the coming weeks, adjusted for seasons and holidays | No |
 | `seed-data.js` | The sample Kennedy menu, loaded once if you ask for it | No |
 | `config.js` | **Your two Supabase "addresses"** | **Yes, once (Step 4)** |
 | `supabase/schema.sql` | Instructions that build your database tables | No, you just copy and paste it |

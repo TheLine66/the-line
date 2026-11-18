@@ -763,3 +763,23 @@ table.sched tfoot td { border-bottom: none; border-top: 2px solid var(--ink); fo
 .ov-more { text-align: center; margin: 22px 0 0; font-size: 15px; }
 @media (max-width: 900px) { .ov-cards { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 480px) { .ov-cards { grid-template-columns: 1fr; } .ov-wrap { padding: 20px 14px 32px; } }
+
+/* ---------- Demand Forecaster (forecast.js) ---------- */
+.fc-chart { position: relative; }
+.fc-chart svg { max-width: 900px; margin: 0 auto; }
+.fc-tip { position: absolute; top: 0; pointer-events: none; background: var(--surface); border: 1px solid var(--line-strong); padding: 6px 10px; font-size: 12.5px; line-height: 1.45; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.fc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 10px 0 0; }
+.fc-key { display: inline-block; width: 22px; height: 0; margin-left: 10px; vertical-align: middle; }
+.fc-key:first-child { margin-left: 0; }
+.fc-key-actual { border-top: 2px solid var(--green); }
+.fc-key-fc { border-top: 2px dashed var(--butter); }
+.fc-key-band { height: 10px; background: var(--butter); opacity: .3; }
+.toolbar label.fc-check { font-weight: 400; padding-bottom: 8px; }
+.fc-season { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+@media (max-width: 700px) { .fc-season { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.fc-month { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.fc-bar { display: flex; align-items: flex-end; width: 100%; max-width: 34px; height: 70px; background: var(--track, var(--tint)); }
+.fc-bar span { display: block; width: 100%; background: var(--green); border-radius: 3px 3px 0 0; }
+.fc-mname { font-size: 12px; font-weight: 600; }
+.fc-month input { width: 100%; max-width: 64px; text-align: center; padding: 4px 2px; }
+#fcWeeksTable td.used { max-width: 340px; white-space: normal; }
