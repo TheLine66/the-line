@@ -494,9 +494,9 @@ if (!LABOR_ON) delete PAGE_NAMES.labor;
 // Which pages show as tabs in the row under the logo. Saved in this
 // browser; every page is always reachable from the Menu.
 const TABS_KEY = "line.tabs";
-const DEFAULT_TABS = ["cost", "perf", "specials", "forecast", "labor", "mod"].filter((p) => p in PAGE_NAMES);
+const DEFAULT_TABS = ["cost", "perf", "specials", "labor", "mod"].filter((p) => p in PAGE_NAMES);
 // Pages added after someone saved their tab choice: pinned once, then theirs to unpin.
-const NEW_TABS = ["forecast"];
+const NEW_TABS = [];
 function pinnedTabs() {
   try {
     const v = JSON.parse(safeGet(TABS_KEY) || "null");
