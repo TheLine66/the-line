@@ -763,6 +763,23 @@ table.sched tfoot td { border-bottom: none; border-top: 2px solid var(--ink); fo
 .ov-more { text-align: center; margin: 22px 0 0; font-size: 15px; }
 @media (max-width: 900px) { .ov-cards { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 480px) { .ov-cards { grid-template-columns: 1fr; } .ov-wrap { padding: 20px 14px 32px; } }
+
+/* ---------- Menu scan (Recipes) ---------- */
+.menu-scan-wrap { padding-bottom: 0; }
+.menu-scan-wrap .chart-card { margin-bottom: 0; }
+#menuScanResult .section-label { margin: 18px 0 8px; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+#menuScanResult .section-label .muted { font-weight: 500; }
+.menu-scan-table td { vertical-align: top; }
+.ms-desc { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; line-height: 1.4; max-width: 340px; }
+.ms-ings { font-size: 13px; line-height: 1.5; min-width: 220px; max-width: 420px; padding-top: 10px; }
+.ms-qty { color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.flag-need, .flag-check, .flag-dup { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 3px; white-space: nowrap; }
+.flag-need { color: var(--over); background: var(--over-bg); }
+.flag-check { color: var(--watch); background: var(--watch-bg); }
+.flag-dup { color: var(--ink-3); background: var(--hover); }
+.dish-row .cat .flag-need, .dish-row .cat .flag-check { margin-top: 3px; }
+#onboardMenuField input[type=file] { font-size: 13px; padding: 8px 0; }
+
 .inv-math { font-size: 12px; margin-top: 4px; white-space: nowrap; }
 
 /* Restaurant address (new restaurant and Settings) */

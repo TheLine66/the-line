@@ -98,6 +98,9 @@
             <option value="">Blank: I'll add my own menu</option>
           </select>
         </label>
+        <label id="onboardMenuField" class="hidden">Photos or a PDF of your menu
+          <input type="file" id="onboardMenuFile" accept="image/*,application/pdf" multiple>
+        </label>
         <p class="muted small" id="onboardSeedNote">Sample menus are made-up data you can edit or delete anytime.</p>
         <button class="applybtn wide" type="submit" id="onboardSubmit">Create restaurant</button>
       </form>
@@ -316,6 +319,17 @@
 
   <!-- Recipes -->
   <div class="page" id="page-recipes">
+    <div class="perf-wrap menu-scan-wrap">
+      <div class="chart-card" id="menuScanCard">
+        <div class="chart-head"><h3>Scan a Menu</h3><span class="note">Snap your printed menu (up to 6 pages). Gemini reads the dishes and works out the ingredients each one uses. You check everything before it saves.</span></div>
+        <div class="row-actions">
+          <label class="applybtn pic-btn" id="menuScanBtn">Snap or upload a menu<input type="file" id="menuScanFile" accept="image/*,application/pdf" multiple hidden></label>
+          <span class="note" id="menuScanNote"></span>
+        </div>
+        <div class="blade-track menu-wait hidden" id="menuScanBlade" aria-hidden="true"></div>
+        <div id="menuScanResult"></div>
+      </div>
+    </div>
     <main>
       <div class="rail">
         <div class="rail-head"><span>Dishes</span><button class="linkbtn light" id="newDishBtn" type="button">+ New dish</button></div>
